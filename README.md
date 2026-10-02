@@ -181,7 +181,9 @@ Pass it to the screen as `strings:`. The `label` argument names the range that w
 final devStore = DevSetupStore(keyPrefix: 'dev', config: discovery);
 ```
 
-Pass it to the screen as `store:`. At startup, read it back with the same prefix: `DevSetup.savedBaseUrl(keyPrefix: 'dev')`. A key that already holds a value of another type reads as unset rather than failing.
+Pass it to the screen as `store:`. At startup, read it back with the same prefix: `DevSetup.savedBaseUrl(keyPrefix: 'dev')`. A key that already holds a value of another type reads as unset rather than failing, and so does a single label or pin that isn't a string.
+
+`ServerPins` maps a key to the pinned host. The key is the host's own /24, such as `192.168.1.`, for a private LAN address, and `*` for anything else. A pin stored under another key, as a setup that keyed pins by the phone's subnet would have, moves to its host's key when read, unless that key already holds a pin. A value that isn't a bare host, such as `192.168.1.40:5001` or a full URL, is dropped, so it can't take a key from a real pin.
 
 ## How discovery works
 
@@ -210,9 +212,9 @@ Suffixes such as `.local` and `.lan` are removed from either name. A name the de
 
 ## Saved addresses: VPNs and tunnels
 
-The scan only covers the /24 the phone is on. It can't find a laptop on a VPN or tunnel (for example, Tailscale running on both machines), on another subnet, or in the cloud. Add those with the + button. A hostname works as well as an IP.
+The scan only covers the /24 the phone is on. It can't find a laptop on a VPN or tunnel (for example, Tailscale running on both machines), on another subnet, or in the cloud. Add those with the + button. A hostname works as well as an IP, and an IPv6 literal goes in brackets, as in `http://[fd7a:115c:a1e0::5]:8080`.
 
-- Saved addresses are stored as `scheme://host:port`, so one address typed two ways is a single entry. A bare `http://` address gets the first configured port, a bare `https://` one gets 443, and an explicit port, `:80` included, is kept. Saving a host and port again under the other scheme switches the saved entry in place.
+- Saved addresses are stored as `scheme://host:port`, with an IPv6 literal in its shortest form, so one address typed two ways is a single entry. A bare `http://` address gets the first configured port, a bare `https://` one gets 443, and an explicit port, `:80` included, is kept. Saving a host and port again under the other scheme switches the saved entry in place.
 - They stay in the list until the developer removes them with Forget in the server's name dialog.
 - They are re-checked on every scan, and a check that finishes after the sweep still updates the list. Until a saved address answers, it is marked "saved".
 
@@ -253,7 +255,7 @@ The simulator never asks for local network access.
 
 ### Network limits
 
-Discovery is IPv4 only, and a saved address can't be an IPv6 literal. For an IPv6-only server, save a hostname instead. The scan covers exactly the phone's own /24 in a private range (10/8, 172.16/12 or 192.168/16), even when the network is larger. Some guest and office Wi-Fi networks isolate devices from each other, which blocks this traffic completely. If the laptop's firewall silently drops connection attempts instead of refusing them, the laptop looks dead and its other ports are never tried.
+Discovery is IPv4 only. For an IPv6-only server, save its address: a hostname, or a literal in brackets. The scan covers exactly the phone's own /24 in a private range (10/8, 172.16/12 or 192.168/16), even when the network is larger. Some guest and office Wi-Fi networks isolate devices from each other, which blocks this traffic completely. If the laptop's firewall silently drops connection attempts instead of refusing them, the laptop looks dead and its other ports are never tried.
 
 - For a server outside the /24, or behind a firewall like that, save its address.
 - On a network that isolates devices, reach the server through a tunnel.

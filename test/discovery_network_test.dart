@@ -6,10 +6,28 @@ import 'package:flutter_test/flutter_test.dart';
 // Real sockets on loopback. Kept free of the widget binding, which would
 // replace HttpClient with a stub.
 
-Future<HttpServer> serve(void Function(HttpRequest request) handler) async {
-  final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+Future<HttpServer> serve(
+  void Function(HttpRequest request) handler, {
+  InternetAddress? address,
+}) async {
+  final server = await HttpServer.bind(
+    address ?? InternetAddress.loopbackIPv4,
+    0,
+  );
   server.listen(handler);
   return server;
+}
+
+void answerPing(HttpRequest request) {
+  if (request.uri.path != '/api/ping') {
+    request.response.statusCode = 404;
+  } else {
+    request.response.headers
+      ..add('x-dev-host', 'dev-laptop')
+      ..add('x-dev-host', 'dev-laptop-2');
+    request.response.write('Success');
+  }
+  request.response.close();
 }
 
 DiscoveryConfig configFor(int port) => DiscoveryConfig(
@@ -21,22 +39,22 @@ DiscoveryConfig configFor(int port) => DiscoveryConfig(
   concurrency: 128,
 );
 
-void main() {
+Future<bool> canBind(InternetAddress address) async {
+  try {
+    await (await ServerSocket.bind(address, 0)).close();
+    return true;
+  } on SocketException {
+    return false;
+  }
+}
+
+Future<void> main() async {
+  final hasIpv6Loopback = await canBind(InternetAddress.loopbackIPv6);
   late HttpServer server;
   late int port;
 
   setUp(() async {
-    server = await serve((request) {
-      if (request.uri.path != '/api/ping') {
-        request.response.statusCode = 404;
-      } else {
-        request.response.headers
-          ..add('x-dev-host', 'dev-laptop')
-          ..add('x-dev-host', 'dev-laptop-2');
-        request.response.write('Success');
-      }
-      request.response.close();
-    });
+    server = await serve(answerPing);
     port = server.port;
   });
 
@@ -83,6 +101,27 @@ void main() {
     );
     expect(
       await DevServerDiscovery(config: config).verify('127.0.0.1', port),
+      isNotNull,
+    );
+  });
+
+  test('a query in the health path is sent as a query', () async {
+    final queried = await serve((request) {
+      final probe = request.uri.queryParameters['probe'];
+      request.response.statusCode =
+          request.uri.path == '/api/ping' && probe == '1' ? 200 : 404;
+      request.response.close();
+    });
+    addTearDown(() => queried.close(force: true));
+    final config = DiscoveryConfig(
+      ports: [queried.port],
+      healthPath: '/api/ping?probe=1',
+    );
+
+    expect(
+      await DevServerDiscovery(
+        config: config,
+      ).verify('127.0.0.1', queried.port),
       isNotNull,
     );
   });
@@ -189,6 +228,60 @@ void main() {
       isFalse,
     );
   });
+
+  group(
+    'on the IPv6 loopback',
+    skip: hasIpv6Loopback ? false : 'this machine has no IPv6 loopback',
+    () {
+      late HttpServer v6;
+
+      setUp(() async {
+        v6 = await serve(answerPing, address: InternetAddress.loopbackIPv6);
+      });
+
+      tearDown(() => v6.close(force: true));
+
+      test('verify reaches a server by its bare address', () async {
+        final found = await DevServerDiscovery(
+          config: configFor(v6.port),
+        ).verify('::1', v6.port);
+
+        expect(found?.host, '::1');
+        expect(found?.hostname, 'dev-laptop');
+        expect(found?.origin, 'http://[::1]:${v6.port}');
+      });
+
+      test('verifyOrigin takes a bracketed address', () async {
+        final found = await DevServerDiscovery(
+          config: configFor(v6.port),
+        ).verifyOrigin('http://[::1]:${v6.port}/api/v1/');
+
+        expect(found?.origin, 'http://[::1]:${v6.port}');
+      });
+
+      test('isReachable answers for a saved IPv6 URL', () async {
+        final config = configFor(v6.port);
+        expect(
+          await DevSetup.isReachable(
+            'http://[::1]:${v6.port}/api/v1/',
+            config: config,
+          ),
+          isTrue,
+        );
+
+        final spare = await ServerSocket.bind(InternetAddress.loopbackIPv6, 0);
+        final deadPort = spare.port;
+        await spare.close();
+        expect(
+          await DevSetup.isReachable(
+            'http://[::1]:$deadPort/api/v1/',
+            config: config,
+          ),
+          isFalse,
+        );
+      });
+    },
+  );
 
   test('the emulator path finds a server on the host alias', () async {
     final found = <DevServer>[];

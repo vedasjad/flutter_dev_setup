@@ -65,9 +65,31 @@ class DevSetupStore {
   Future<void> setLabels(Map<String, String> labels) =>
       _writeMap(labelsKey, labels);
 
-  /// Keyed by subnet for LAN addresses and by [globalPinKey] for anything else.
-  Future<Map<String, String>> pins() async => _readMap(pinsKey);
-  Future<void> setPins(Map<String, String> pins) => _writeMap(pinsKey, pins);
+  /// Keyed by the pinned host's subnet for a LAN address and by
+  /// [globalPinKey] for anything else. A pin found under another key, such as
+  /// the phone's subnet an older screen used, moves to its host's key unless
+  /// one is already there. A value that is not a bare host is dropped, so it
+  /// cannot take a key from a real pin.
+  Future<Map<String, String>> pins() async =>
+      _keyedByHost(await _readMap(pinsKey));
+  Future<void> setPins(Map<String, String> pins) =>
+      _writeMap(pinsKey, _keyedByHost(pins));
+
+  static Map<String, String> _keyedByHost(Map<String, String> pins) {
+    final held = pins.entries.where((pin) => _isBareHost(pin.value));
+    final keyed = {
+      for (final MapEntry(:key, :value) in held)
+        if (key == pinKeyFor(value)) key: value,
+    };
+    for (final MapEntry(:value) in held) {
+      keyed.putIfAbsent(pinKeyFor(value), () => value);
+    }
+    return keyed;
+  }
+
+  static bool _isBareHost(String value) =>
+      value.isNotEmpty &&
+      Uri.tryParse('http://${urlHost(value)}')?.host == value;
 
   Future<String?> rememberedHost() async =>
       _nonEmpty(_string(await _read(rememberedHostKey)));
@@ -92,7 +114,10 @@ class DevSetupStore {
     try {
       final decoded = jsonDecode(raw);
       if (decoded is! Map) return {};
-      return decoded.map((k, v) => MapEntry(k.toString(), v.toString()));
+      return {
+        for (final MapEntry(:key, :value) in decoded.entries)
+          if (value is String) '$key': value,
+      };
     } catch (_) {
       return {};
     }
@@ -115,6 +140,12 @@ class DevSetupStore {
   /// pin made on one network still holds on another.
   static const String globalPinKey = '*';
 }
+
+/// LAN addresses pin per subnet, so home and office keep separate choices;
+/// anything else — a VPN or tunnel name — pins everywhere.
+String pinKeyFor(String host) => DevServerDiscovery.isPrivateIpv4(host)
+    ? DevServerDiscovery.subnetBaseOf(host)!
+    : DevSetupStore.globalPinKey;
 
 /// Entry points for app bootstrap.
 abstract final class DevSetup {

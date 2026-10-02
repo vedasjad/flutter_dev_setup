@@ -241,7 +241,7 @@ class DevServerDiscovery implements DevServerScanner {
         : '/${config.healthPath}';
     try {
       final request = await client
-          .getUrl(Uri.parse('$scheme://$host:$port$path'))
+          .getUrl(Uri.parse('$scheme://${urlHost(host)}:$port$path'))
           .timeout(config.verifyTimeout);
       final response = await request.close().timeout(config.verifyTimeout);
       final body = await _readBody(response).timeout(config.verifyTimeout);

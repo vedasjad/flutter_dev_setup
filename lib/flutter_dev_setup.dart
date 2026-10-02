@@ -5,9 +5,9 @@ library;
 export 'src/controller.dart' show DevSetupController, PingStatus, ScanPhase;
 export 'src/discovery.dart' show DevServerDiscovery, PortState;
 export 'src/discovery_config.dart';
-export 'src/models.dart';
+export 'src/models.dart' hide urlHost;
 export 'src/scanner.dart';
-export 'src/store.dart';
+export 'src/store.dart' hide pinKeyFor;
 export 'src/ui/dialogs.dart'
     show
         ForgetServer,

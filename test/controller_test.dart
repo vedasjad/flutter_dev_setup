@@ -141,6 +141,39 @@ void main() {
       },
     );
 
+    test('a pasted IPv6 URL keeps its brackets in the field', () async {
+      final c = await buildController();
+
+      c.urlController.text = 'http://[::1]:5001/api/v1/';
+      c.onUrlEdited();
+
+      expect(c.urlController.text, '[::1]:5001');
+      expect(c.fullUrl, 'http://[::1]:5001/api/v1/');
+      expect(c.isValid, isTrue);
+    });
+
+    test('an IPv6 server stays selected through commit and relaunch', () async {
+      SharedPreferences.setMockInitialValues({
+        'devCustomServers': ['http://[::1]:5001'],
+      });
+      final committed = <String>[];
+      final c = await buildController(committed: committed);
+
+      await c.select(entryFor(c, '[::1]:5001'));
+
+      expect(c.urlController.text, '[::1]:5001');
+      expect(committed, ['http://[::1]:5001/api/v1/']);
+      expect(c.isSelected(entryFor(c, '[::1]:5001')), isTrue);
+      expect(
+        await DevSetup.savedBaseUrl(keyPrefix: 'dev'),
+        'http://[::1]:5001/api/v1/',
+      );
+
+      final relaunched = await buildController();
+      expect(relaunched.urlController.text, '[::1]:5001');
+      expect(relaunched.isSelected(entryFor(relaunched, '[::1]:5001')), isTrue);
+    });
+
     test('reset returns to the default and commits it', () async {
       final committed = <String>[];
       final c = await buildController(
@@ -265,6 +298,73 @@ void main() {
       await c.scan();
 
       expect(c.baseOrigin, 'http://192.168.0.111:5001');
+    });
+
+    test(
+      'one scan lists pinned, remembered, named, then fastest, then by host',
+      () async {
+        SharedPreferences.setMockInitialValues({
+          'devServerPins': '{"192.168.0.":"192.168.0.140"}',
+          'devDiscoveredHost': '192.168.0.130',
+          'devServerLabels': '{"192.168.0.125":"laptop"}',
+        });
+        final pinned = server('192.168.0.140', ms: 90);
+        final remembered = server('192.168.0.130', ms: 80);
+        final labelled = server('192.168.0.125', ms: 70);
+        final advertised = server('192.168.0.122', ms: 60, name: 'ci-box');
+        final fastest = server('192.168.0.110', ms: 5);
+        final tiedLow = server('192.168.0.103', ms: 20);
+        final tiedHigh = server('192.168.0.120', ms: 20);
+        final c = await buildController(
+          scanner: FakeScanner(
+            found: [
+              tiedHigh,
+              fastest,
+              advertised,
+              tiedLow,
+              remembered,
+              labelled,
+              pinned,
+            ],
+          ),
+        );
+
+        await c.scan(manual: false);
+
+        expect(endpoints(c), [
+          for (final s in [
+            pinned,
+            remembered,
+            advertised,
+            labelled,
+            fastest,
+            tiedLow,
+            tiedHigh,
+          ])
+            s.endpoint,
+        ]);
+      },
+    );
+
+    test('a server named only by its own IP ranks as unnamed', () async {
+      final c = await buildController(
+        scanner: FakeScanner(
+          found: [
+            server('192.168.0.50', ms: 90, name: '192.168.0.50'),
+            server('192.168.0.70', ms: 95, name: '192.168.0.70.'),
+            server('192.168.0.60', ms: 5),
+          ],
+        ),
+      );
+
+      await c.scan(manual: false);
+
+      expect(endpoints(c), [
+        '192.168.0.60:5001',
+        '192.168.0.50:5001',
+        '192.168.0.70:5001',
+      ]);
+      expect(c.servers.where((e) => e.isNamed), isEmpty);
     });
 
     test('a manual scan with several unpinned results selects none', () async {
@@ -829,6 +929,89 @@ void main() {
         DevSetupStore.globalPinKey: 'box.tailnet.example',
       });
     });
+
+    for (final (origin, endpoint) in [
+      ('https://abc.ngrok.app', 'abc.ngrok.app:443'),
+      ('http://100.101.102.103:5001', '100.101.102.103:5001'),
+      ('http://10.0.0.5:5001', '10.0.0.5:5001'),
+    ]) {
+      test(
+        'a pin an older screen keyed by the phone subnet still holds: $origin',
+        () async {
+          final host = Uri.parse(origin).host;
+          SharedPreferences.setMockInitialValues({
+            'devCustomServers': [origin],
+            'devServerPins': '{"192.168.1.":"$host"}',
+          });
+          final c = await buildController();
+          expect(entryFor(c, endpoint).pinned, isTrue);
+
+          await c.togglePin(entryFor(c, endpoint));
+          expect(entryFor(c, endpoint).pinned, isFalse);
+          expect(await c.store.pins(), isEmpty);
+
+          await c.togglePin(entryFor(c, endpoint));
+          final relaunched = await buildController();
+          expect(entryFor(relaunched, endpoint).pinned, isTrue);
+        },
+      );
+    }
+
+    test('a junk pin from an older screen leaves the real one held', () async {
+      SharedPreferences.setMockInitialValues({
+        'devCustomServers': ['https://abc.ngrok.app', 'http://10.0.0.5:5001'],
+        'devServerPins': '{"192.168.1.":null,"192.168.0.":"abc.ngrok.app"}',
+      });
+      final c = await buildController();
+      expect(entryFor(c, 'abc.ngrok.app:443').pinned, isTrue);
+
+      await c.togglePin(entryFor(c, '10.0.0.5:5001'));
+      final relaunched = await buildController();
+
+      expect(entryFor(relaunched, 'abc.ngrok.app:443').pinned, isTrue);
+      expect(entryFor(relaunched, '10.0.0.5:5001').pinned, isTrue);
+    });
+
+    test('an IPv6 literal written another way is the same server', () async {
+      final c = await buildController();
+      await c.addCustom('http://[::1]:5001');
+      await c.togglePin(entryFor(c, '[::1]:5001'));
+
+      await c.addCustom('http://[0:0:0:0:0:0:0:1]:5001');
+      await c.addCustom('http://[0::1]');
+
+      expect(endpoints(c), ['[::1]:5001']);
+      expect(await c.store.customOrigins(), ['http://[::1]:5001']);
+      expect(entryFor(c, '[::1]:5001').pinned, isTrue);
+      expect(c.isSelected(entryFor(c, '[::1]:5001')), isTrue);
+
+      c.urlController.text = '[0:0:0:0:0:0:0:1]:5001';
+      c.onUrlEdited();
+      expect(c.isSelected(entryFor(c, '[::1]:5001')), isTrue);
+    });
+
+    test(
+      'an IPv6 literal is saved, selected and checked in brackets',
+      () async {
+        final committed = <String>[];
+        final c = await buildController(
+          committed: committed,
+          scanner: FakeScanner(
+            verifyResults: {'http://[::1]:5001': server('::1', ms: 4)},
+          ),
+        );
+
+        final stored = await c.addCustom('http://[::1]');
+
+        expect(stored, 'http://[::1]:5001');
+        expect(await c.store.customOrigins(), ['http://[::1]:5001']);
+        expect(committed, ['http://[::1]:5001/api/v1/']);
+        final entry = entryFor(c, '[::1]:5001');
+        expect(entry.custom, isTrue);
+        expect(entry.server.reachable, isTrue);
+        expect(c.isSelected(entry), isTrue);
+      },
+    );
   });
 
   group('health', () {
@@ -1017,6 +1200,24 @@ void main() {
       final c = await buildController();
       expect(c.urlController.text, '192.168.0.5:80');
       expect(c.fullUrl, 'http://192.168.0.5:80/api/v1/');
+    });
+
+    test('puts an IPv6 literal back in the field in brackets', () async {
+      SharedPreferences.setMockInitialValues({
+        'devBaseUrl': 'http://[::1]:5001/api/v1/',
+        'devBaseUrlSuffix': '/api/v1/',
+      });
+      final c = await buildController(
+        scanner: FakeScanner(
+          verifyResults: {'http://[::1]:5001': server('::1')},
+        ),
+      );
+
+      expect(c.urlController.text, '[::1]:5001');
+      expect(c.baseOrigin, 'http://[::1]:5001');
+      expect(c.fullUrl, 'http://[::1]:5001/api/v1/');
+      await c.checkHealth();
+      expect(c.settledStatus, PingStatus.online);
     });
 
     test('keeps a path prefix rather than dropping it', () async {

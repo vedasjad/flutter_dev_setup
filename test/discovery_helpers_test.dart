@@ -195,6 +195,83 @@ void main() {
     });
   });
 
+  group('an IPv6 literal', () {
+    test('keeps its host bare and is bracketed in origin and endpoint', () {
+      final server = DevServer.parse('http://[fd7a:115c:a1e0::5]:8080')!;
+      expect(server.host, 'fd7a:115c:a1e0::5');
+      expect(server.port, 8080);
+      expect(server.origin, 'http://[fd7a:115c:a1e0::5]:8080');
+      expect(server.endpoint, '[fd7a:115c:a1e0::5]:8080');
+
+      const built = DevServer(host: '::1', port: 5001, latencyMs: 3);
+      expect(built.origin, 'http://[::1]:5001');
+      expect(built.endpoint, '[::1]:5001');
+    });
+
+    test('gets the same default ports as any other host', () {
+      const config = DiscoveryConfig(ports: [5001]);
+      expect(
+        DevServer.parse('http://[::1]', config: config)!.origin,
+        'http://[::1]:5001',
+      );
+      expect(DevServer.parse('https://[::1]/')!.origin, 'https://[::1]:443');
+      expect(
+        DevServer.fromUrl('http://[::1]/api/v1/')!.origin,
+        'http://[::1]:80',
+      );
+    });
+
+    test('normalises to a form that reads back as the same server', () {
+      final normal = DevServer.normalize(' http://[::1]:5001/ ');
+      expect(normal, 'http://[::1]:5001');
+      expect(DevServer.normalize(normal!), normal);
+      expect(DevServer.fromUrl(normal)!.host, '::1');
+    });
+
+    test('is kept in one form however it is written', () {
+      for (final written in [
+        'http://[0:0:0:0:0:0:0:1]:5001',
+        'http://[0::1]:5001',
+        'http://[::0:1]:5001',
+      ]) {
+        expect(DevServer.normalize(written), 'http://[::1]:5001');
+      }
+      expect(
+        DevServer.parse('http://[FD7A:115C:A1E0:0:0:0:0:5]:8080')!.host,
+        'fd7a:115c:a1e0::5',
+      );
+      expect(
+        DevServer.fromUrl('http://[2001:db8:0:0:1:0:0:1]/')!.host,
+        '2001:db8::1:0:0:1',
+      );
+      expect(
+        DevServer.parse('http://[fe80:0::1%25en0]:5001')!.host,
+        'fe80::1%25en0',
+      );
+    });
+
+    test('given already in brackets is not bracketed twice', () {
+      const server = DevServer(host: '[::1]', port: 5001, latencyMs: 3);
+      expect(server.origin, 'http://[::1]:5001');
+    });
+
+    test('leaves IPv4 addresses and hostnames written as before', () {
+      expect(
+        DevServer.normalize('https://box.example.com'),
+        'https://box.example.com:443',
+      );
+      expect(DevServer.normalize('http://10.0.0.4:80/'), 'http://10.0.0.4:80');
+      expect(
+        DevServer.parse('http://10.0.0.4:5001')!.endpoint,
+        '10.0.0.4:5001',
+      );
+      expect(
+        const DevServer(host: 'box.local', port: 8080, latencyMs: 1).origin,
+        'http://box.local:8080',
+      );
+    });
+  });
+
   group('verifyOrigin', () {
     test('checks the port the URL will actually be sent to', () async {
       final discovery = RecordingDiscovery();
@@ -262,6 +339,11 @@ void main() {
       expect(entry(hostname: 'dev-laptop.local').displayName, 'dev-laptop');
       expect(entry().displayName, '192.168.0.107');
       expect(entry().isNamed, isFalse);
+    });
+
+    test('is named by a resolved hostname as well as by a label', () {
+      expect(entry(hostname: 'dev-laptop.local').isNamed, isTrue);
+      expect(entry(label: 'Mine').isNamed, isTrue);
     });
   });
 

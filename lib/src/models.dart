@@ -1,3 +1,6 @@
+import 'dart:io';
+import 'dart:typed_data';
+
 import 'discovery_config.dart';
 
 /// A server that answered the health check, or an address saved by hand.
@@ -10,6 +13,8 @@ class DevServer {
     this.scheme = 'http',
   });
 
+  /// Bare even for an IPv6 literal, as sockets take it; [origin] and
+  /// [endpoint] add the brackets.
   final String host;
   final int port;
 
@@ -20,8 +25,8 @@ class DevServer {
   final String? hostname;
   final String scheme;
 
-  String get origin => '$scheme://$host:$port';
-  String get endpoint => '$host:$port';
+  String get origin => '$scheme://$endpoint';
+  String get endpoint => '${urlHost(host)}:$port';
   bool get reachable => latencyMs >= 0;
 
   DevServer copyWith({int? latencyMs, String? hostname, String? scheme}) =>
@@ -50,7 +55,27 @@ class DevServer {
     if (uri == null || uri.host.isEmpty) return null;
     final scheme = uri.scheme == 'https' ? 'https' : 'http';
     final port = explicitPortOf(raw) ?? (scheme == 'https' ? 443 : httpPort());
-    return DevServer(host: uri.host, port: port, latencyMs: -1, scheme: scheme);
+    return DevServer(
+      host: _shortestForm(uri.host),
+      port: port,
+      latencyMs: -1,
+      scheme: scheme,
+    );
+  }
+
+  /// [Uri] only lowercases an IPv6 literal, so `[0::1]` and `[::1]` would be
+  /// two servers.
+  static String _shortestForm(String host) {
+    if (!host.contains(':')) return host;
+    final zone = host.indexOf('%');
+    final address = zone < 0 ? host : host.substring(0, zone);
+    try {
+      final bytes = Uint8List.fromList(Uri.parseIPv6Address(address));
+      return InternetAddress.fromRawAddress(bytes).address +
+          (zone < 0 ? '' : host.substring(zone));
+    } on FormatException {
+      return host;
+    }
   }
 
   /// The canonical `scheme://host:port` form of a typed address, so the same
@@ -102,6 +127,10 @@ int? explicitPortOf(String raw) {
 final RegExp _authority = RegExp(
   r'^[a-zA-Z][a-zA-Z0-9+.\-]*://(?:[^/?#@]*@)?(?:\[[^\]]*\]|[^/?#:@]*)(?::(\d+))?',
 );
+
+/// [host] as a URL writes it, with an IPv6 literal in brackets.
+String urlHost(String host) =>
+    host.contains(':') && !host.startsWith('[') ? '[$host]' : host;
 
 String prettyHostname(String raw) {
   var name = raw.endsWith('.') ? raw.substring(0, raw.length - 1) : raw;

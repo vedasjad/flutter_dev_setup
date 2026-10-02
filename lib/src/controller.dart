@@ -144,7 +144,7 @@ class DevSetupController extends ChangeNotifier {
   DevServerEntry _entryFor(DevServer server) => DevServerEntry(
     server: server,
     label: _labels[server.host],
-    pinned: _pins[_pinKeyFor(server)] == server.host,
+    pinned: _pins[pinKeyFor(server.host)] == server.host,
     custom: _customEndpoints.contains(server.endpoint),
   );
 
@@ -292,7 +292,7 @@ class DevSetupController extends ChangeNotifier {
       for (final endpoint in _order)
         if (_foundThisScan.contains(endpoint)) _servers[endpoint]!,
     ];
-    final pinned = found.where((s) => _pins[_pinKeyFor(s)] == s.host);
+    final pinned = found.where((s) => _pins[pinKeyFor(s.host)] == s.host);
     if (pinned.isNotEmpty) return _apply(pinned.first);
     if (found.length == 1) return _apply(found.single);
   }
@@ -347,11 +347,12 @@ class DevSetupController extends ChangeNotifier {
   }
 
   int _rank(DevServer server) {
-    if (_rankPins[_pinKeyFor(server)] == server.host) return 0;
+    if (_rankPins[pinKeyFor(server.host)] == server.host) return 0;
     if (_rankRemembered == server.host) return 1;
-    final named =
-        (_rankLabels[server.host]?.isNotEmpty ?? false) ||
-        (server.hostname?.isNotEmpty ?? false);
+    final named = DevServerEntry(
+      server: server,
+      label: _rankLabels[server.host],
+    ).isNamed;
     return named ? 2 : 3;
   }
 
@@ -362,13 +363,6 @@ class DevSetupController extends ChangeNotifier {
     if (byLatency != 0) return byLatency;
     return a.host.compareTo(b.host);
   }
-
-  /// LAN addresses pin per subnet, so home and office keep separate choices;
-  /// anything else — a VPN or tunnel name — pins everywhere.
-  String _pinKeyFor(DevServer server) =>
-      DevServerDiscovery.isPrivateIpv4(server.host)
-      ? DevServerDiscovery.subnetBaseOf(server.host)!
-      : DevSetupStore.globalPinKey;
 
   // -- choosing --------------------------------------------------------------
 
@@ -432,7 +426,7 @@ class DevSetupController extends ChangeNotifier {
   // -- annotating ------------------------------------------------------------
 
   Future<void> togglePin(DevServerEntry entry) async {
-    final key = _pinKeyFor(entry.server);
+    final key = pinKeyFor(entry.server.host);
     if (_pins[key] == entry.server.host) {
       _pins.remove(key);
     } else {
@@ -595,7 +589,7 @@ class DevSetupController extends ChangeNotifier {
     final path = uri.path.endsWith('/')
         ? uri.path.substring(0, uri.path.length - 1)
         : uri.path;
-    urlController.text = '${uri.host}$port$path';
+    urlController.text = '${urlHost(uri.host)}$port$path';
   }
 
   void _notify() {

@@ -9,13 +9,13 @@ Initial release.
 - `DevSetupScreen` chooses the API base URL from the default, a server found on the local network, or a saved address. The choice is applied at runtime through `onBaseUrlChanged` and kept across launches.
 - `DevServerDiscovery` sweeps the device's /24: known hosts first, then the DHCP lease band, then the rest of the subnet working outward from the device. A host counts only if `isHealthy` accepts its health response, and the other ports are tried only on hosts already known to be up. On an emulator or simulator it checks the host machine's alias and lists it even before the server starts.
 - Servers are named by an `x-dev-host` response header or a reverse DNS lookup. A name the developer gives a server is kept on that device.
-- Saved addresses for VPNs, tunnels and other subnets, normalised to `scheme://host:port` and re-checked on every scan. Pins are per subnet for private LAN addresses and global for everything else.
+- Saved addresses for VPNs, tunnels and other subnets, normalised to `scheme://host:port` and re-checked on every scan. An IPv6 literal is accepted in brackets, as in `http://[fd7a:115c::5]:8080`, saved in its shortest form, and kept in brackets wherever it is saved, restored, checked or shown. Pins are per subnet for private LAN addresses and global for everything else.
 - `DevSetup.savedBaseUrl({keyPrefix})` and `DevSetup.isReachable(url, {config, timeout})` restore the saved URL in `main()`, before the first request.
 
 ### Configuration
 
 - `DiscoveryConfig`: ports, health path, `isHealthy`, name header, lease band, connect, verify and reverse-lookup timeouts, and concurrency.
-- `DevSetupStore(keyPrefix, config)` keeps everything in `SharedPreferences` under `<prefix>BaseUrl`, `BaseUrlSuffix`, `CustomServers`, `ServerLabels`, `ServerPins`, `DiscoveredHost` and `DiscoveredOctet`. A key holding a value of another type reads as unset.
+- `DevSetupStore(keyPrefix, config)` keeps everything in `SharedPreferences` under `<prefix>BaseUrl`, `BaseUrlSuffix`, `CustomServers`, `ServerLabels`, `ServerPins`, `DiscoveredHost` and `DiscoveredOctet`. A key, or a single label or pin, holding a value of another type reads as unset. A pin stored under another key, such as the phone's subnet rather than the server's, moves to its server's key when read, unless that key already holds a pin, and `setPins` writes only those keys. A pin whose value isn't a bare host is dropped.
 - `DevSetupStrings` holds all of the screen's text. `enableDiscovery: false` turns scanning off and leaves saved addresses working.
 
 ### Behaviour guarantees
