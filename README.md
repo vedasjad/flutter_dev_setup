@@ -10,14 +10,8 @@ This package scans the phone's network for servers that pass your health check a
 
 ## Install
 
-The package isn't on pub.dev yet, so depend on it from Git:
-
-```yaml
-dependencies:
-  flutter_dev_setup:
-    git:
-      url: https://github.com/vedasjad/flutter_dev_setup.git
-      ref: v0.2.0
+```sh
+flutter pub add flutter_dev_setup
 ```
 
 It needs Dart 3.8 and Flutter 3.32 or later. You'll also need the [platform setup](#platform-setup) below.

@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.2.1
+
+- First release on pub.dev. No code changes from 0.2.0.
+
 ## 0.2.0
 
 ### Breaking changes
