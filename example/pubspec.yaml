@@ -1,0 +1,19 @@
+name: flutter_dev_setup_example
+description: Restores the saved dev server URL at startup and shows the developer setup screen in debug builds.
+publish_to: none
+
+environment:
+  sdk: ^3.8.0
+  flutter: ">=3.32.0"
+
+dependencies:
+  flutter:
+    sdk: flutter
+  flutter_dev_setup:
+    path: ../
+
+dev_dependencies:
+  flutter_lints: ^6.0.0
+
+flutter:
+  uses-material-design: true

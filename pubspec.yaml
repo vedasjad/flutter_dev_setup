@@ -1,0 +1,28 @@
+name: flutter_dev_setup
+description: >-
+  A developer setup screen for Flutter apps: find dev servers on the local
+  network, switch the API base URL at runtime, and keep the choice across
+  launches.
+version: 0.1.0
+repository: https://github.com/vedasjad/flutter_dev_setup
+publish_to: none
+
+topics:
+  - developer-tools
+  - networking
+  - debugging
+
+environment:
+  sdk: ^3.8.0
+  flutter: ">=3.32.0"
+
+dependencies:
+  flutter:
+    sdk: flutter
+  device_info_plus: ">=12.0.0 <14.0.0"
+  shared_preferences: ^2.5.2
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^6.0.0
