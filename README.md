@@ -217,12 +217,12 @@ Pass it to the screen as `store:`. At startup, read it back with the same prefix
 
 ## How discovery works
 
-On an emulator or simulator (detected with `device_info_plus`), the scanner first tries every configured port on the alias for the host machine: `10.0.2.2` on Android, `127.0.0.1` on iOS. A scan the developer starts selects the alias the moment it answers if nothing is pinned, or if the alias is the pinned server. Otherwise it waits for the scan to end, then selects the pinned server if it found it, or else the alias. If nothing answers at all, the alias is listed anyway, because it is the right address even before the server starts, and a scan the developer starts selects it.
+On an emulator or simulator (detected with `device_info_plus`), the scanner first tries every configured port on the alias for the host machine: `10.0.2.2` on Android, `127.0.0.1` on iOS. A scan the developer starts selects the alias the moment it answers if nothing is pinned, or if the alias is the pinned server. Otherwise it waits for the scan to end, then selects the pinned server if it found it, or else the alias. If the alias doesn't answer, it is listed anyway, even when other servers did, because it is the right address before the server starts. A scan the developer starts then selects it ahead of any server that isn't pinned.
 
 The scanner then sweeps the LAN the host machine is on, so servers on other machines show up too. An Android emulator sits behind its own NAT on 10.0.2.0/24, so its own address says nothing about that LAN. The scanner sweeps at most two /24s, taken in this order from:
 
 1. The host's own addresses, which its server can list in an [`x-dev-lan` header](#your-dev-server).
-2. The device's own LAN address, unless it is in the emulator's NAT. On the iOS simulator this is the Mac's address.
+2. On the iOS simulator, the device's own LAN address, which is the Mac's. An Android emulator's own address is always inside the emulator, so it is never used.
 3. When neither 1 nor 2 names a LAN, the `routerAddresses` that answer, in the order listed: those that accept or refuse a connection on port 80 or 53. An unreachable host or network doesn't count, since a router elsewhere can send that back just as fast. They are probed while the alias is checked, so they add no time to the scan.
 4. Addresses the developer has used: the host in the URL field, the last server used, the LAN server remembered as `LanHost`, then pinned, saved and named servers.
 
@@ -239,7 +239,7 @@ On a physical device, the scanner takes the phone's Wi-Fi or Ethernet IPv4 addre
 Each candidate goes through two stages:
 
 1. A TCP connection to the first port separates dead hosts from live ones. A refused connection still proves the host is up, and an unreachable network or a host reported down counts as down. Other failures are judged by timing: one that comes back well inside the timeout counts as a refusal. That includes an unreachable host, which is how Linux reports a firewall's administratively prohibited reject, from a host that may serve another port.
-2. A host with that port open gets an HTTP `GET` of `healthPath`. It counts as a server only if `isHealthy` accepts the response; an open port alone never counts.
+2. A host with that port open gets an HTTP `GET` of `healthPath`. It counts as a server only if `isHealthy` accepts the response; an open port alone never counts. Redirects aren't followed, so a host can't send the check somewhere else and borrow that answer.
 
 Hosts that are up but have no server on the first port are then tried on the remaining ports.
 
@@ -360,7 +360,7 @@ For a widget test, pass the same controller to `DevSetupScreen(controller: ...)`
 ## Behaviour guarantees
 
 - The scan that runs when the screen opens only lists servers. It never changes the committed URL.
-- A scan the developer starts (with Local IP, the refresh button or Scan again) selects the pinned server if it found it. On an emulator it otherwise selects the host alias, the moment the alias answers if nothing is pinned. Failing both, it selects the only server if it found exactly one. If it found several, the developer chooses. If the developer picks a server or edits the URL while it runs, it selects nothing after that.
+- A scan the developer starts (with Local IP, the refresh button or Scan again) selects the pinned server if it found it. On an emulator it otherwise selects the host alias, the moment the alias answers if nothing is pinned. Failing both, it selects the only server if it found exactly one. If it found several, the developer chooses. If the developer picks a server or edits the URL while it runs, it selects nothing after that. Tapping Local IP while the opening scan runs turns that scan into one the developer started, rather than cancelling it.
 - Typing in the URL or suffix field never commits anything. A URL is committed when the developer taps a server, Default, Reset or Proceed, or adds an address, or when a scan they started selects a server.
 - Selecting, pinning and renaming never reorder the list. Saved addresses come first, in the order they were added, and keep their place as they come online. Discovered servers are ranked as they arrive (pinned first, then last used, then named, then fastest) and don't move again until the next scan.
 - An address that is both saved and discovered appears once. Rows are matched by host and port, so a server saved under a hostname and found on the LAN by its IP is listed twice.

@@ -31,13 +31,15 @@ class DevServerDiscovery implements DevServerScanner {
     @visibleForTesting String? emulatorHost,
     @visibleForTesting bool Function(String ip)? isLanAddress,
     @visibleForTesting Future<bool> Function(String host)? routerProbe,
+    @visibleForTesting bool? isAndroid,
   }) : assert(config.ports.isNotEmpty, 'DiscoveryConfig.ports is empty'),
        _isEmulator = isEmulator ?? detectEmulator,
        _lanAddress = lanAddress ?? deviceLanAddress,
        _newHttpClient = httpClient ?? HttpClient.new,
        _emulatorHost = emulatorHost,
        _isLanAddress = isLanAddress ?? isPrivateIpv4,
-       _routerProbe = routerProbe;
+       _routerProbe = routerProbe,
+       _isAndroid = isAndroid ?? Platform.isAndroid;
 
   final DiscoveryConfig config;
   final HttpClient Function() _newHttpClient;
@@ -46,6 +48,7 @@ class DevServerDiscovery implements DevServerScanner {
   final String? _emulatorHost;
   final bool Function(String ip) _isLanAddress;
   final Future<bool> Function(String host)? _routerProbe;
+  final bool _isAndroid;
 
   static const List<String> _skipInterfacePrefixes = [
     'awdl',
@@ -150,10 +153,9 @@ class DevServerDiscovery implements DevServerScanner {
     void Function(String subnetBase)? onSubnet,
     void Function(int probed, int total, String label)? onProgress,
   }) async {
-    final host =
-        _emulatorHost ?? (Platform.isAndroid ? '10.0.2.2' : '127.0.0.1');
+    final host = _emulatorHost ?? (_isAndroid ? '10.0.2.2' : '127.0.0.1');
     const hostLabel = 'emulator host';
-    final deviceAddress = await _lanAddress();
+    final deviceAddress = _isAndroid ? null : await _lanAddress();
     final deviceNamesLan = emulatorSubnets(
       deviceAddress: deviceAddress,
       isLan: _isLanAddress,
@@ -219,19 +221,15 @@ class DevServerDiscovery implements DevServerScanner {
         label: label,
       );
     }
-    if (foundHosts.isNotEmpty) {
-      return ScanSummary(
-        ScanOutcome.found,
-        subnetBase: subnetBase,
-        label: label,
-      );
-    }
     // The alias is right even before the server is up, so offer it anyway.
+    final fallback = foundHosts.contains(host)
+        ? null
+        : DevServer(host: host, port: config.primaryPort, latencyMs: 0);
     return ScanSummary(
-      ScanOutcome.notFound,
+      foundHosts.isEmpty ? ScanOutcome.notFound : ScanOutcome.found,
       subnetBase: subnetBase,
       label: label,
-      fallback: DevServer(host: host, port: config.primaryPort, latencyMs: 0),
+      fallback: fallback,
     );
   }
 
@@ -446,6 +444,7 @@ class DevServerDiscovery implements DevServerScanner {
       final request = await client
           .getUrl(Uri.parse('$scheme://${urlHost(host)}:$port$path'))
           .timeout(config.verifyTimeout);
+      request.followRedirects = false;
       final response = await request.close().timeout(config.verifyTimeout);
       final body = await _readBody(response).timeout(config.verifyTimeout);
       if (!config.isHealthy(response.statusCode, body)) return null;

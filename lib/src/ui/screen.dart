@@ -253,7 +253,7 @@ class _DevSetupScreenState extends State<DevSetupScreen>
               const SizedBox(height: 12),
               _SourceSwitch(
                 urlMode: c.urlMode,
-                scanning: c.isScanning,
+                scanning: c.isManualScan,
                 showLocal: c.enableDiscovery,
                 theme: _theme,
                 strings: _strings,

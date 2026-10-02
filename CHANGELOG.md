@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.2.2
+
+- The health check no longer follows redirects. A host could answer with a redirect to a healthy server, be listed as a dev server itself, and make the device request any URL it chose.
+- On an emulator the host alias is listed whenever it doesn't answer, even when other servers did, and a scan the developer starts selects it ahead of any server that isn't pinned. Before, Local IP with your own server down and one colleague's server up selected the colleague's.
+- An Android emulator's own address no longer names the LAN to sweep. Images that put Wi-Fi on 192.168.232.x had the router guess skipped and an empty network swept.
+- Tapping Local IP while the opening scan runs takes that scan over and selects the alias if it has answered, instead of cancelling it. `DevSetupController.isManualScan` tells the two apart, and the Local IP control shows Cancel only for a scan the developer started.
+
 ## 0.2.1
 
 - First release on pub.dev. No code changes from 0.2.0.

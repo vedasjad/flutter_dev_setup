@@ -800,6 +800,68 @@ void main() {
       expect(c.urlController.text, '10.0.0.7:9000');
     });
 
+    test(
+      'Local IP during the opening scan selects it instead of cancelling',
+      () async {
+        final committed = <String>[];
+        final c = await buildController(
+          committed: committed,
+          scanner: FakeScanner(
+            preferred: alias,
+            found: [server('192.168.0.101')],
+            preferredDelay: pause,
+          ),
+        );
+
+        final scanning = c.scan(manual: false);
+        await Future<void>.delayed(midway);
+        expect(c.isManualScan, isFalse);
+        await c.toggleScan();
+        expect(c.isScanning, isTrue);
+        expect(c.isManualScan, isTrue);
+        await Future<void>.delayed(midway);
+        expect(committed, [aliasUrl]);
+        await scanning;
+
+        expect(c.scanPhase, ScanPhase.found);
+        expect(committed, [aliasUrl]);
+      },
+    );
+
+    test('Local IP cancels a scan the developer started', () async {
+      final c = await buildController(
+        scanner: FakeScanner(preferred: alias, preferredDelay: pause),
+      );
+
+      final scanning = c.scan();
+      await Future<void>.delayed(midway);
+      await c.toggleScan();
+      await scanning;
+
+      expect(c.scanPhase, ScanPhase.cancelled);
+    });
+
+    test('a dead alias still beats the only other server found', () async {
+      final committed = <String>[];
+      final c = await buildController(
+        committed: committed,
+        scanner: FakeScanner(
+          found: [server('192.168.0.101')],
+          fallback: server('10.0.2.2', ms: 0),
+        ),
+      );
+
+      await c.scan(manual: false);
+      expect(
+        endpoints(c),
+        containsAll(['10.0.2.2:5001', '192.168.0.101:5001']),
+      );
+      expect(committed, isEmpty);
+
+      await c.scan();
+      expect(committed, [aliasUrl]);
+    });
+
     test('one from a cancelled scan is never selected', () async {
       final committed = <String>[];
       final c = await buildController(

@@ -3,7 +3,7 @@ description: >-
   A developer setup screen for Flutter apps: find dev servers on the local
   network, switch the API base URL at runtime, and keep the choice across
   launches.
-version: 0.2.1
+version: 0.2.2
 repository: https://github.com/vedasjad/flutter_dev_setup
 issue_tracker: https://github.com/vedasjad/flutter_dev_setup/issues
 

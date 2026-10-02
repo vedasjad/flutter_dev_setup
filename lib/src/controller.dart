@@ -87,6 +87,9 @@ class DevSetupController extends ChangeNotifier {
   String _scanLabel = '';
   int get foundCount => _foundThisScan.length;
   bool get isScanning => _scanPhase == ScanPhase.running;
+
+  /// A scan the developer started, or one they took over with [toggleScan].
+  bool get isManualScan => isScanning && _scanManual;
   double? get scanProgress => isScanning && _scanTotal > 0
       ? (_scanProbed / _scanTotal).clamp(0.0, 1.0)
       : null;
@@ -117,6 +120,9 @@ class DevSetupController extends ChangeNotifier {
   /// does not overrule one made while it ran.
   int _choices = 0;
   DevServerScanner? _activeScanner;
+  bool _scanManual = false;
+  int _scanChoices = 0;
+  DevServer? _scanPreferred;
   bool _disposed = false;
 
   String get baseOrigin => '$_scheme://${urlController.text.trim()}';
@@ -202,7 +208,9 @@ class DevSetupController extends ChangeNotifier {
     if (!enableDiscovery || _disposed) return;
     cancelScan();
     final generation = ++_generation;
-    final choices = _choices;
+    _scanManual = manual;
+    _scanChoices = _choices;
+    _scanPreferred = null;
     _scanPhase = ScanPhase.running;
     _scanProbed = 0;
     _scanTotal = 0;
@@ -220,7 +228,6 @@ class DevSetupController extends ChangeNotifier {
     unawaited(_verifyCustoms(generation, scanner));
 
     final ScanSummary summary;
-    DevServer? preferred;
     try {
       summary = await scanner.scan(
         currentHost: hostOf(baseOrigin),
@@ -235,11 +242,8 @@ class DevSetupController extends ChangeNotifier {
         },
         onPreferred: (server) {
           if (generation != _generation) return;
-          if (!manual || choices != _choices) return;
-          preferred = server;
-          if (_pins.isEmpty || _isPinned(server)) {
-            unawaited(_apply(_servers[server.endpoint] ?? server));
-          }
+          _scanPreferred = server;
+          if (_scanManual && _scanChoices == _choices) _selectPreferredNow();
         },
         onProgress: (probed, total, label) {
           if (generation != _generation) return;
@@ -268,11 +272,15 @@ class DevSetupController extends ChangeNotifier {
     if (generation != _generation) return;
     _activeScanner = null;
     _scanLabel = summary.label ?? _scanLabel;
-    final autoSelect = manual && choices == _choices;
+    final autoSelect = _scanManual && _scanChoices == _choices;
     switch (summary.outcome) {
       case ScanOutcome.found:
+        final fallback = summary.fallback;
+        if (fallback != null) _upsertFound(fallback);
         _scanPhase = ScanPhase.found;
-        if (autoSelect) await _selectAfterManualScan(preferred);
+        if (autoSelect) {
+          await _selectAfterManualScan(_scanPreferred ?? fallback);
+        }
       case ScanOutcome.notFound:
         final fallback = summary.fallback;
         if (fallback != null) {
@@ -292,14 +300,27 @@ class DevSetupController extends ChangeNotifier {
     _notify();
   }
 
-  /// What the Local IP control does: cancels a running scan, or starts a
-  /// manual one.
+  /// What the Local IP control does: starts a manual scan, takes over the
+  /// automatic one as if the developer had started it, or cancels a manual one.
   Future<void> toggleScan() async {
-    if (isScanning) {
+    if (isManualScan) {
       cancelScan();
       return;
     }
+    if (isScanning) {
+      _scanManual = true;
+      _scanChoices = _choices;
+      _selectPreferredNow();
+      _notify();
+      return;
+    }
     await scan();
+  }
+
+  void _selectPreferredNow() {
+    final preferred = _scanPreferred;
+    if (preferred == null || !(_pins.isEmpty || _isPinned(preferred))) return;
+    unawaited(_apply(_servers[preferred.endpoint] ?? preferred));
   }
 
   void cancelScan() {

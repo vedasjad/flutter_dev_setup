@@ -514,6 +514,29 @@ Future<void> main() async {
     expect(tried, [80, 53, 80, 53]);
   });
 
+  test('rejects a host that redirects to a healthy server', () async {
+    final asked = <String>[];
+    final target = await serve((request) {
+      asked.add(request.uri.path);
+      answerPing(request);
+    });
+    addTearDown(() => target.close(force: true));
+    final redirector = await serve((request) {
+      request.response
+        ..statusCode = HttpStatus.found
+        ..headers.set('location', 'http://127.0.0.1:${target.port}/api/ping');
+      request.response.close();
+    });
+    addTearDown(() => redirector.close(force: true));
+
+    final found = await DevServerDiscovery(
+      config: configFor(redirector.port),
+    ).verify('127.0.0.1', redirector.port);
+
+    expect(found, isNull);
+    expect(asked, isEmpty);
+  });
+
   test('a physical device never reports a preferred server', () async {
     final found = <DevServer>[];
     final preferred = <DevServer>[];
@@ -619,7 +642,7 @@ Future<void> main() async {
         expect(summary.outcome, ScanOutcome.found);
         expect(summary.label, 'emulator host and 127.0.0.0/24');
         expect(summary.subnetBase, '127.0.0.');
-        expect(summary.fallback, isNull);
+        expect(summary.fallback?.endpoint, '[::1]:$port');
       },
       timeout: const Timeout(Duration(seconds: 30)),
     );
@@ -902,6 +925,32 @@ Future<void> main() async {
 
       expect(probedDuringCheck, isTrue);
     });
+
+    test(
+      'on Android ignores its own address, which is inside the emulator',
+      () async {
+        final probed = <String>[];
+        final log = ScanLog();
+
+        await log.run(
+          DevServerDiscovery(
+            config: emulatorConfigFor(port, routers: ['127.0.0.1']),
+            isEmulator: () async => true,
+            lanAddress: () async => '127.0.5.2',
+            emulatorHost: '127.0.0.1',
+            isLanAddress: loopbackIsLan,
+            routerProbe: (host) async {
+              probed.add(host);
+              return false;
+            },
+            isAndroid: true,
+          ),
+        );
+
+        expect(probed, ['127.0.0.1']);
+        expect(log.subnets, isEmpty);
+      },
+    );
 
     test('stops within a sweep, and before the next, when cancelled', () async {
       final host = await serve(answerPingListing(['127.0.0.5', '127.0.1.5']));
