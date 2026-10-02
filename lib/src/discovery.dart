@@ -4,6 +4,7 @@ import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:device_info_plus/device_info_plus.dart';
+import 'package:flutter/foundation.dart' show visibleForTesting;
 
 import 'discovery_config.dart';
 import 'models.dart';
@@ -21,11 +22,14 @@ class DevServerDiscovery implements DevServerScanner {
     this.config = const DiscoveryConfig(),
     Future<bool> Function()? isEmulator,
     Future<String?> Function()? lanAddress,
+    @visibleForTesting HttpClient Function()? httpClient,
   }) : assert(config.ports.isNotEmpty, 'DiscoveryConfig.ports is empty'),
        _isEmulator = isEmulator ?? detectEmulator,
-       _lanAddress = lanAddress ?? deviceLanAddress;
+       _lanAddress = lanAddress ?? deviceLanAddress,
+       _newHttpClient = httpClient ?? HttpClient.new;
 
   final DiscoveryConfig config;
+  final HttpClient Function() _newHttpClient;
   final Future<bool> Function() _isEmulator;
   final Future<String?> Function() _lanAddress;
 
@@ -234,7 +238,10 @@ class DevServerDiscovery implements DevServerScanner {
     int port, {
     String scheme = 'http',
   }) async {
-    final client = HttpClient()..connectionTimeout = config.connectTimeout;
+    // Only a host that already accepted a probe, or one URL checked directly,
+    // gets here, so connecting (DNS, TCP and TLS) takes the verify budget. On
+    // an emulator that alone often runs past a second.
+    final client = _newHttpClient()..connectionTimeout = config.verifyTimeout;
     final elapsed = Stopwatch()..start();
     final path = config.healthPath.startsWith('/')
         ? config.healthPath

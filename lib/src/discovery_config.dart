@@ -30,11 +30,14 @@ class DiscoveryConfig {
   final int leaseBandStart;
   final int leaseBandEnd;
 
-  /// Paid once per dead host, so it stays tight.
+  /// The sweep's TCP probe. Paid once per dead host, so it stays tight. Health
+  /// checks do not use it.
   final Duration connectTimeout;
 
-  /// Paid only by hosts that accepted a connection, so it can afford to wait
-  /// out a machine whose Wi-Fi radio is waking from power saving.
+  /// Each step of a health check: connecting (DNS, TCP and TLS), sending, and
+  /// reading the response. Paid only by hosts that accepted a probe and by URLs
+  /// checked directly, so it can wait out Wi-Fi power saving or the slow DNS of
+  /// an emulator.
   final Duration verifyTimeout;
   final Duration reverseLookupTimeout;
 

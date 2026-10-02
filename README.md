@@ -47,7 +47,7 @@ Future<void> main() async {
 
 Do this in `main()`, for two reasons. First, an app's services usually start making requests as it boots (a token refresh, remote config, analytics), before the setup screen is built. Second, the screen loads the saved URL into its fields but doesn't call `onBaseUrlChanged` until a choice is committed. `savedBaseUrl()` returns the full URL, suffix included, or null if nothing was ever committed.
 
-The `isReachable` check is optional. It runs the same health check as the screen, with a 1.5-second timeout by default. If the saved address has gone stale (the laptop changed networks, or the server isn't running), the app falls back to the default instead of failing every request it makes at launch. Leave the check out if you'd rather those requests fail loudly.
+The `isReachable` check is optional. It runs the same health check as the screen, with a 3-second timeout by default (connecting to a live HTTPS server from an emulator can take close to two seconds). If the saved address has gone stale (the laptop changed networks, or the server isn't running), the app falls back to the default instead of failing every request it makes at launch. Leave the check out if you'd rather those requests fail loudly.
 
 ### 2. Show the screen
 
@@ -111,8 +111,8 @@ Pass it to the screen as `discovery:`. Also pass the same object to `DevSetup.is
 | `isHealthy` | any 2xx | Decides from the status code and body whether the server is yours. It sees at most the first megabyte of the body. |
 | `hostHeader` | `x-dev-host` | Response header a server can use to name itself. |
 | `leaseBandStart`, `leaseBandEnd` | 100, 120 | Probed before the rest of the subnet, since most routers hand out addresses from .100 up. |
-| `connectTimeout` | 600 ms | Time allowed for each TCP connection attempt. |
-| `verifyTimeout` | 4 s | Time allowed for the health response, once a host has accepted the connection. |
+| `connectTimeout` | 600 ms | Time allowed for each TCP probe during the subnet sweep. Not used by health checks. |
+| `verifyTimeout` | 4 s | Time allowed for each step of a health check: connecting (DNS, TCP and TLS), sending, and reading the response. |
 | `reverseLookupTimeout` | 400 ms | Time allowed for a reverse DNS lookup on servers that don't name themselves. |
 | `concurrency` | 48 | Number of probes in flight at once. |
 

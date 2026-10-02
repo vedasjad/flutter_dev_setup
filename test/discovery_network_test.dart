@@ -165,6 +165,38 @@ Future<void> main() async {
     expect(seen, 1024 * 1024);
   });
 
+  // The sweep's connect budget used to cap the health check's connection too,
+  // so DNS, TCP and TLS to a live server from an emulator (often over a
+  // second) timed out and a healthy server flickered between online and not.
+  test(
+    'a health check connects within verifyTimeout, not the sweep budget',
+    () async {
+      final made = <HttpClient>[];
+      final discovery = DevServerDiscovery(
+        config: DiscoveryConfig(
+          ports: [port],
+          healthPath: '/api/ping',
+          isHealthy: (status, body) =>
+              status == 200 && body.contains('Success'),
+          connectTimeout: const Duration(milliseconds: 50),
+          verifyTimeout: const Duration(seconds: 3),
+        ),
+        httpClient: () {
+          final client = HttpClient();
+          made.add(client);
+          return client;
+        },
+      );
+
+      expect(await discovery.verify('127.0.0.1', port), isNotNull);
+      expect(await discovery.verifyOrigin('http://127.0.0.1:$port'), isNotNull);
+      expect(made, hasLength(2));
+      for (final client in made) {
+        expect(client.connectionTimeout, const Duration(seconds: 3));
+      }
+    },
+  );
+
   test('verify rejects a server the health check does not accept', () async {
     final strict = DiscoveryConfig(
       ports: [port],

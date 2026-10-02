@@ -162,10 +162,12 @@ abstract final class DevSetup {
 
   /// Whether [url]'s server answers the health check within [timeout]. Use it
   /// to avoid pointing launch-time requests at an address that has gone stale.
+  /// Connecting to a live HTTPS server from an emulator can take close to two
+  /// seconds, so keep [timeout] well clear of that.
   static Future<bool> isReachable(
     String url, {
     DiscoveryConfig config = const DiscoveryConfig(),
-    Duration timeout = const Duration(milliseconds: 1500),
+    Duration timeout = const Duration(seconds: 3),
   }) async {
     final server = await DevServerDiscovery(
       config: config,
