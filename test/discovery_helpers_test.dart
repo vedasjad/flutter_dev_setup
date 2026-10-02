@@ -147,6 +147,238 @@ void main() {
       expect(phases.first, isEmpty);
       expect(phases[1], isNot(contains('192.168.1.110')));
     });
+
+    test('with nothing to exclude, walks outward from the centre itself', () {
+      final phases = DevServerDiscovery.candidatePhases(
+        subnetBase: '192.168.1.',
+        ownOctet: 137,
+        exclude: const [],
+      );
+      final all = phases.expand((phase) => phase).toList();
+
+      expect(phases[2].take(3), [
+        '192.168.1.137',
+        '192.168.1.136',
+        '192.168.1.138',
+      ]);
+      expect(all, hasLength(254));
+      expect(all.toSet(), hasLength(254));
+    });
+
+    test('puts known hosts first and never proposes an excluded one', () {
+      final phases = DevServerDiscovery.candidatePhases(
+        subnetBase: '192.168.0.',
+        ownOctet: 100,
+        knownHosts: ['192.168.0.101', '192.168.0.100', '10.1.1.1', 'box.lan'],
+        exclude: const ['192.168.0.100', '192.168.0.57'],
+      );
+      final all = phases.expand((phase) => phase).toList();
+
+      expect(phases.first, ['192.168.0.101']);
+      expect(phases[2].first, '192.168.0.99');
+      expect(all, isNot(contains('192.168.0.100')));
+      expect(all, isNot(contains('192.168.0.57')));
+      expect(all, hasLength(252));
+    });
+
+    test('counts a known host only if isLan accepts it', () {
+      final byDefault = DevServerDiscovery.candidatePhases(
+        subnetBase: '127.0.0.',
+        ownOctet: 1,
+        knownHosts: ['127.0.0.9'],
+      );
+      final loopbackAsLan = DevServerDiscovery.candidatePhases(
+        subnetBase: '127.0.0.',
+        ownOctet: 1,
+        knownHosts: ['127.0.0.9'],
+        isLan: (ip) => ip.startsWith('127.'),
+      );
+
+      expect(byDefault.first, isEmpty);
+      expect(loopbackAsLan.first, ['127.0.0.9']);
+    });
+  });
+
+  group('emulatorSubnets', () {
+    List<String> basesOf(List<({String subnetBase, int centre})> subnets) => [
+      for (final subnet in subnets) subnet.subnetBase,
+    ];
+
+    test('ranks the host, then the device, then hints, two at most', () {
+      final subnets = DevServerDiscovery.emulatorSubnets(
+        advertised: ['192.168.0.100'],
+        deviceAddress: '172.16.5.9',
+        hints: ['192.168.1.7', '10.9.0.4'],
+      );
+      expect(basesOf(subnets), ['192.168.0.', '172.16.5.']);
+
+      expect(
+        basesOf(
+          DevServerDiscovery.emulatorSubnets(
+            deviceAddress: '172.16.5.9',
+            hints: ['192.168.1.7', '10.9.0.4'],
+          ),
+        ),
+        ['172.16.5.', '192.168.1.'],
+      );
+    });
+
+    test('takes hints in order, one subnet each', () {
+      final subnets = DevServerDiscovery.emulatorSubnets(
+        hints: ['192.168.1.7', '192.168.1.9', '10.9.0.4', '192.168.2.1'],
+      );
+      expect(basesOf(subnets), ['192.168.1.', '10.9.0.']);
+      expect(subnets.first.centre, 7);
+    });
+
+    test('ignores the emulator NAT, loopback, hostnames and public '
+        'addresses', () {
+      final subnets = DevServerDiscovery.emulatorSubnets(
+        advertised: [
+          '10.0.2.2',
+          '127.0.0.1',
+          'dev-laptop.local',
+          '8.8.8.8',
+          '100.64.0.9',
+          '192.168.1',
+        ],
+        deviceAddress: '10.0.2.16',
+        hints: ['10.0.2.15', '::1', 'box.tailnet.example', '192.168.0.101'],
+      );
+      expect(basesOf(subnets), ['192.168.0.']);
+      expect(subnets.single.centre, 101);
+    });
+
+    test('centres on the host, then the device, before any hint', () {
+      final subnets = DevServerDiscovery.emulatorSubnets(
+        advertised: ['192.168.0.100', '192.168.0.105'],
+        deviceAddress: '192.168.0.57',
+        hints: ['192.168.0.101', '192.168.0.100'],
+      );
+      expect(basesOf(subnets), ['192.168.0.']);
+      expect(subnets.single.centre, 100);
+      expect(
+        DevServerDiscovery.emulatorSubnets(
+          deviceAddress: '192.168.0.57',
+          hints: ['192.168.0.101'],
+        ).single.centre,
+        57,
+      );
+    });
+
+    test('centres a subnet only hints name on its first hint', () {
+      final subnets = DevServerDiscovery.emulatorSubnets(
+        advertised: ['192.168.0.100'],
+        hints: ['192.168.1.42', '192.168.1.7', '192.168.0.9'],
+      );
+      expect(basesOf(subnets), ['192.168.0.', '192.168.1.']);
+      expect(subnets.first.centre, 100);
+      expect(subnets.last.centre, 42);
+    });
+
+    test('reads an address however it is written', () {
+      final subnets = DevServerDiscovery.emulatorSubnets(
+        advertised: ['192.168.000.100'],
+        hints: ['192.168.0.100'],
+      );
+      expect(basesOf(subnets), ['192.168.0.']);
+      expect(subnets.single.centre, 100);
+    });
+
+    test('takes what counts as a LAN, but never the emulator NAT', () {
+      final subnets = DevServerDiscovery.emulatorSubnets(
+        advertised: ['10.0.2.2'],
+        deviceAddress: '127.0.0.254',
+        isLan: (ip) => true,
+      );
+      expect(basesOf(subnets), ['127.0.0.']);
+      expect(subnets.single.centre, 254);
+    });
+
+    test('finds nothing to sweep with nothing to go on', () {
+      expect(DevServerDiscovery.emulatorSubnets(), isEmpty);
+      expect(
+        DevServerDiscovery.emulatorSubnets(deviceAddress: '10.0.2.16'),
+        isEmpty,
+      );
+    });
+  });
+
+  test('every default router address is one an emulator sweep accepts', () {
+    const routers = DiscoveryConfig.defaultRouterAddresses;
+    expect(routers.toSet(), hasLength(routers.length));
+    for (final router in routers) {
+      expect(
+        DevServerDiscovery.emulatorSubnets(hints: [router]),
+        hasLength(1),
+        reason: router,
+      );
+    }
+  });
+
+  group('classifyConnectError', () {
+    const timeout = Duration(milliseconds: 1500);
+    PortState classify(int? code, String os, {required int ms}) =>
+        DevServerDiscovery.classifyConnectError(
+          code,
+          elapsed: Duration(milliseconds: ms),
+          timeout: timeout,
+          operatingSystem: os,
+        );
+
+    test('trusts a refusal, an unreachable network or a host reported down '
+        'whatever it took', () {
+      for (final (os, refused, netUnreachable, hostDown) in [
+        ('android', 111, 101, 112),
+        ('linux', 111, 101, 112),
+        ('macos', 61, 51, 64),
+        ('ios', 61, 51, 64),
+        ('windows', 10061, 10051, 10064),
+        ('windows', 1225, 1231, 1256),
+      ]) {
+        final reason = '$os $refused';
+        expect(
+          classify(refused, os, ms: 1400),
+          PortState.refused,
+          reason: reason,
+        );
+        expect(
+          classify(netUnreachable, os, ms: 5),
+          PortState.dead,
+          reason: reason,
+        );
+        expect(classify(hostDown, os, ms: 5), PortState.dead, reason: reason);
+      }
+    });
+
+    test('reads an unreachable host by how long it took', () {
+      for (final (os, hostUnreachable) in [
+        ('android', 113),
+        ('macos', 65),
+        ('windows', 10065),
+        ('windows', 1232),
+      ]) {
+        final reason = '$os $hostUnreachable';
+        expect(
+          classify(hostUnreachable, os, ms: 5),
+          PortState.refused,
+          reason: reason,
+        );
+        expect(
+          classify(hostUnreachable, os, ms: 1300),
+          PortState.dead,
+          reason: reason,
+        );
+      }
+    });
+
+    test('reads any other failure by how long it took', () {
+      expect(classify(null, 'android', ms: 100), PortState.refused);
+      expect(classify(null, 'android', ms: 1300), PortState.dead);
+      expect(classify(110, 'macos', ms: 1500), PortState.dead);
+      expect(classify(111, 'macos', ms: 1400), PortState.dead);
+      expect(classify(61, 'linux', ms: 100), PortState.refused);
+    });
   });
 
   group('DevServer.parse', () {

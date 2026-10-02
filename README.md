@@ -17,7 +17,7 @@ dependencies:
   flutter_dev_setup:
     git:
       url: https://github.com/vedasjad/flutter_dev_setup.git
-      ref: v0.1.0
+      ref: v0.2.0
 ```
 
 It needs Dart 3.8 and Flutter 3.32 or later. You'll also need the [platform setup](#platform-setup) below.
@@ -86,6 +86,35 @@ Show the screen only in builds meant for developers. The example uses `kDebugMod
 - Every server you use, the default one included, must answer `healthPath` with a response that `isHealthy` accepts (any 2xx by default). Otherwise Proceed stays disabled. The default `healthPath` is `/`, which many APIs answer with a 404, so point it at a real health endpoint.
 - The check goes to the port your HTTP client will use. A URL without a port, in `defaultBaseUrl` or typed into the URL field, is checked on 80 for `http://` and 443 for `https://`.
 - Optionally, send an `x-dev-host` response header with the machine's name. The server list then shows that name instead of an IP.
+- Optionally, send an `x-dev-lan` response header listing the machine's private IPv4 addresses, separated by commas. An emulator then knows which LAN to sweep for other servers, rather than finding it from its list of common router addresses. Only an emulator or simulator on the same machine reads it, and their requests arrive from loopback, so send it only to loopback clients.
+
+### Server side (optional)
+
+With Express, one middleware on the health route sends both headers:
+
+```js
+const os = require('os');
+
+const isPrivate = (ip) => /^(10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.)/.test(ip);
+const isLoopback = (ip = '') =>
+  ip === '::1' || ip.startsWith('127.') || ip.startsWith('::ffff:127.');
+
+function devHeaders(req, res, next) {
+  res.set('x-dev-host', os.hostname());
+  if (isLoopback(req.socket.remoteAddress)) {
+    const lan = Object.values(os.networkInterfaces())
+      .flat()
+      .filter((a) => a.family === 'IPv4' && !a.internal && isPrivate(a.address))
+      .map((a) => a.address);
+    if (lan.length > 0) res.set('x-dev-lan', lan.join(','));
+  }
+  next();
+}
+
+app.use('/health', devHeaders); // your healthPath
+```
+
+The name goes to every client, so phones on the LAN see it too. The address list goes only to loopback clients.
 
 ## Configuration
 
@@ -110,8 +139,11 @@ Pass it to the screen as `discovery:`. Also pass the same object to `DevSetup.is
 | `healthPath` | `/` | Requested at the server's root, whatever path the base URL has. A missing leading `/` is added. |
 | `isHealthy` | any 2xx | Decides from the status code and body whether the server is yours. It sees at most the first megabyte of the body. |
 | `hostHeader` | `x-dev-host` | Response header a server can use to name itself. |
+| `lanAddressHeader` | `x-dev-lan` | Response header a server can use to list its own LAN IPv4 addresses, separated by commas or on repeated lines. Read only from an emulator's alias for the host machine. `null` turns it off. |
+| `routerAddresses` | common router addresses | Where an emulator looks for the host machine's router when neither the server's `x-dev-lan` header nor the device's own address names the LAN. Those that accept or refuse a connection on port 80 or 53 name the /24s to sweep, in the order listed; an emulator sweeps two /24s at most. The defaults cover common home, office and hotspot routers, such as `192.168.0.1`, `192.168.1.1` and `192.168.29.1`. A cable or fibre modem's `192.168.100.1` comes last, since it also answers from behind the LAN's own router. |
 | `leaseBandStart`, `leaseBandEnd` | 100, 120 | Probed before the rest of the subnet, since most routers hand out addresses from .100 up. |
 | `connectTimeout` | 600 ms | Time allowed for each TCP probe during the subnet sweep. Not used by health checks. |
+| `emulatorConnectTimeout` | 1.5 s | Time allowed for each TCP probe when an emulator sweeps the LAN. |
 | `verifyTimeout` | 4 s | Time allowed for each step of a health check: connecting (DNS, TCP and TLS), sending, and reading the response. |
 | `reverseLookupTimeout` | 400 ms | Time allowed for a reverse DNS lookup on servers that don't name themselves. |
 | `concurrency` | 48 | Number of probes in flight at once. |
@@ -120,6 +152,8 @@ The two timeouts differ on purpose:
 
 - A sweep pays the connect timeout once for every dead address on the subnet, which is most of them, so it stays short.
 - Only the few hosts that accepted a connection pay the verify timeout. It can therefore be long enough to wait for a laptop whose Wi-Fi is waking from power saving.
+
+An emulator's sweep uses `emulatorConnectTimeout` in place of `connectTimeout`, for the reason given under [How discovery works](#how-discovery-works).
 
 Concurrency is capped because probing a host the phone hasn't contacted before needs an ARP lookup, and the kernel's queue of unresolved lookups is small. A larger burst drops packets, and live hosts get reported as dead.
 
@@ -171,11 +205,11 @@ final spanishStrings = DevSetupStrings(
 );
 ```
 
-Pass it to the screen as `strings:`. The `label` argument names the range that was searched, such as `192.168.1.0/24`. On an emulator it is the fixed English text `emulator host`.
+Pass it to the screen as `strings:`. The `label` argument names the range that was searched, such as `192.168.1.0/24`. On an emulator it starts with the fixed English text `emulator host`, followed by the subnets swept, if any, as in `emulator host and 192.168.0.0/24`. While each subnet is being swept, the progress label is that subnet alone.
 
 ## Storage
 
-`DevSetupStore` keeps everything in `SharedPreferences`. Each key is `keyPrefix` followed by a fixed name: `BaseUrl`, `BaseUrlSuffix`, `CustomServers`, `ServerLabels`, `ServerPins`, `DiscoveredHost` or `DiscoveredOctet`. The prefix defaults to `devSetup`. Pass your own prefix to reuse the key names an existing setup already has. For example, `dev` gives `devBaseUrl`.
+`DevSetupStore` keeps everything in `SharedPreferences`. Each key is `keyPrefix` followed by a fixed name: `BaseUrl`, `BaseUrlSuffix`, `CustomServers`, `ServerLabels`, `ServerPins`, `DiscoveredHost`, `DiscoveredOctet` or `LanHost`. The prefix defaults to `devSetup`. Pass your own prefix to reuse the key names an existing setup already has. For example, `dev` gives `devBaseUrl`.
 
 ```dart
 final devStore = DevSetupStore(keyPrefix: 'dev', config: discovery);
@@ -185,9 +219,22 @@ Pass it to the screen as `store:`. At startup, read it back with the same prefix
 
 `ServerPins` maps a key to the pinned host. The key is the host's own /24, such as `192.168.1.`, for a private LAN address, and `*` for anything else. A pin stored under another key, as a setup that keyed pins by the phone's subnet would have, moves to its host's key when read, unless that key already holds a pin. A value that isn't a bare host, such as `192.168.1.40:5001` or a full URL, is dropped, so it can't take a key from a real pin.
 
+`LanHost` is a LAN server the developer used or a scan found. It is kept apart from `DiscoveredHost`, the last server used, so choosing an emulator's alias doesn't lose the network an emulator scan should sweep. A server on another /24 replaces it; another one on the same /24 doesn't.
+
 ## How discovery works
 
-On an emulator or simulator (detected with `device_info_plus`), the scanner tries every configured port on the alias for the host machine: `10.0.2.2` on Android, `127.0.0.1` on iOS. If nothing answers, the alias is listed anyway, because it is the right address even before the server starts. A scan the developer starts selects it.
+On an emulator or simulator (detected with `device_info_plus`), the scanner first tries every configured port on the alias for the host machine: `10.0.2.2` on Android, `127.0.0.1` on iOS. A scan the developer starts selects the alias the moment it answers if nothing is pinned, or if the alias is the pinned server. Otherwise it waits for the scan to end, then selects the pinned server if it found it, or else the alias. If nothing answers at all, the alias is listed anyway, because it is the right address even before the server starts, and a scan the developer starts selects it.
+
+The scanner then sweeps the LAN the host machine is on, so servers on other machines show up too. An Android emulator sits behind its own NAT on 10.0.2.0/24, so its own address says nothing about that LAN. The scanner sweeps at most two /24s, taken in this order from:
+
+1. The host's own addresses, which its server can list in an [`x-dev-lan` header](#your-dev-server).
+2. The device's own LAN address, unless it is in the emulator's NAT. On the iOS simulator this is the Mac's address.
+3. When neither 1 nor 2 names a LAN, the `routerAddresses` that answer, in the order listed: those that accept or refuse a connection on port 80 or 53. An unreachable host or network doesn't count, since a router elsewhere can send that back just as fast. They are probed while the alias is checked, so they add no time to the scan.
+4. Addresses the developer has used: the host in the URL field, the last server used, the LAN server remembered as `LanHost`, then pinned, saved and named servers.
+
+Only private IPv4 addresses outside the emulator's NAT count; hostnames, loopback and public addresses don't. Each /24 is swept the way a phone sweeps its own (known hosts, the lease band, then the rest), working outward from the first of these addresses in it. Nothing in it is skipped, so the host machine is listed twice: once as the alias, and once by its LAN address. The LAN server a scan finds or the developer uses is remembered, so a later scan still sweeps its network after the developer selects the alias, unless the entries above it in this list already name two /24s. With no header, no router that answers and nothing remembered, an Android emulator checks only the alias.
+
+Every connection from an Android emulator crosses its NAT and takes 0.3 to 1.1 seconds, whatever the target. With the usual `connectTimeout` of 600 ms, most refusals would come back too late and live hosts would count as dead, so an emulator's sweep allows `emulatorConnectTimeout` (1.5 s) for each probe. A /24 takes several seconds this way.
 
 On a physical device, the scanner takes the phone's Wi-Fi or Ethernet IPv4 address, skipping interfaces it recognises by name as VPN, cellular, hotspot or peer-to-peer. If there is no Wi-Fi or Ethernet address, it falls back to any other interface with a private address. It then sweeps that /24 in three phases, finishing each before starting the next:
 
@@ -197,7 +244,7 @@ On a physical device, the scanner takes the phone's Wi-Fi or Ethernet IPv4 addre
 
 Each candidate goes through two stages:
 
-1. A TCP connection to the first port separates dead hosts from live ones. A connection that is refused immediately still proves the host is up.
+1. A TCP connection to the first port separates dead hosts from live ones. A refused connection still proves the host is up, and an unreachable network or a host reported down counts as down. Other failures are judged by timing: one that comes back well inside the timeout counts as a refusal. That includes an unreachable host, which is how Linux reports a firewall's administratively prohibited reject, from a host that may serve another port.
 2. A host with that port open gets an HTTP `GET` of `healthPath`. It counts as a server only if `isHealthy` accepts the response; an open port alone never counts.
 
 Hosts that are up but have no server on the first port are then tried on the remaining ports.
@@ -275,7 +322,9 @@ class FakeScanner implements DevServerScanner {
     String? currentHost,
     String? rememberedHost,
     int? rememberedOctet,
+    Iterable<String> knownHosts = const [],
     required void Function(DevServer server) onFound,
+    void Function(DevServer server)? onPreferred,
     void Function(String subnetBase)? onSubnet,
     void Function(int probed, int total, String label)? onProgress,
   }) async {
@@ -312,12 +361,12 @@ void main() {
 }
 ```
 
-For a widget test, pass the same controller to `DevSetupScreen(controller: ...)`. The screen then leaves calling `init()` and `dispose()` to you. `defaultBaseUrl`, `onBaseUrlChanged` and `onProceed` are still required. With a controller, only `onProceed`, `theme` and `strings` are used; the controller's own settings replace `defaultBaseUrl`, `defaultSuffix`, `onBaseUrlChanged`, `discovery`, `store` and `enableDiscovery`. To test with real sockets, `DevServerDiscovery` accepts `isEmulator` and `lanAddress` overrides, so a sweep can run against the loopback address.
+For a widget test, pass the same controller to `DevSetupScreen(controller: ...)`. The screen then leaves calling `init()` and `dispose()` to you. `defaultBaseUrl`, `onBaseUrlChanged` and `onProceed` are still required. With a controller, only `onProceed`, `theme` and `strings` are used; the controller's own settings replace `defaultBaseUrl`, `defaultSuffix`, `onBaseUrlChanged`, `discovery`, `store` and `enableDiscovery`. To test with real sockets, `DevServerDiscovery` accepts `isEmulator` and `lanAddress` overrides, so a sweep can run against the loopback address. For the emulator path, three more overrides marked `@visibleForTesting` help: `emulatorHost` replaces the host alias, for example with an address where nothing answers, `isLanAddress` decides which addresses count as a LAN, so `127.x` can stand in for one, and `routerProbe` decides which `routerAddresses` answer. On the emulator path, pass `lanAddress`, if only as `() async => null`, and either an empty `routerAddresses` or a `routerProbe`. Otherwise the scan reads the test machine's own address and probes its real routers, then sweeps the real /24s they belong to.
 
 ## Behaviour guarantees
 
 - The scan that runs when the screen opens only lists servers. It never changes the committed URL.
-- A scan the developer starts (with Local IP, the refresh button or Scan again) selects the pinned server if it found it, or the only server if it found exactly one. If it found several, the developer chooses. If the developer picks a server or edits the URL while it runs, it selects nothing.
+- A scan the developer starts (with Local IP, the refresh button or Scan again) selects the pinned server if it found it. On an emulator it otherwise selects the host alias, the moment the alias answers if nothing is pinned. Failing both, it selects the only server if it found exactly one. If it found several, the developer chooses. If the developer picks a server or edits the URL while it runs, it selects nothing after that.
 - Typing in the URL or suffix field never commits anything. A URL is committed when the developer taps a server, Default, Reset or Proceed, or adds an address, or when a scan they started selects a server.
 - Selecting, pinning and renaming never reorder the list. Saved addresses come first, in the order they were added, and keep their place as they come online. Discovered servers are ranked as they arrive (pinned first, then last used, then named, then fastest) and don't move again until the next scan.
 - An address that is both saved and discovered appears once. Rows are matched by host and port, so a server saved under a hostname and found on the LAN by its IP is listed twice.

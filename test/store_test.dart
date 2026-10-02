@@ -22,6 +22,7 @@ void main() {
         store.pinsKey,
         store.rememberedHostKey,
         store.rememberedOctetKey,
+        store.lanHostKey,
       ],
       [
         'devBaseUrl',
@@ -31,8 +32,25 @@ void main() {
         'devServerPins',
         'devDiscoveredHost',
         'devDiscoveredOctet',
+        'devLanHost',
       ],
     );
+  });
+
+  test('keeps the LAN host apart from the last server used', () async {
+    final store = DevSetupStore(keyPrefix: 'dev');
+    expect(await store.lanHost(), isNull);
+
+    await store.setLanHost('192.168.0.101');
+    await store.setRemembered('10.0.2.2');
+
+    expect(await store.lanHost(), '192.168.0.101');
+    expect(await store.rememberedHost(), '10.0.2.2');
+  });
+
+  test('reads a LAN host stored as another type as unset', () async {
+    SharedPreferences.setMockInitialValues({'devLanHost': 7});
+    expect(await DevSetupStore(keyPrefix: 'dev').lanHost(), isNull);
   });
 
   test('round-trips the committed URL for bootstrap', () async {

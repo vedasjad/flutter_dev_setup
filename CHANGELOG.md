@@ -1,5 +1,38 @@
 # Changelog
 
+## 0.2.0
+
+### Breaking changes
+
+- `DevServerScanner.scan` takes two more named parameters. `knownHosts` lists hints for where to look, best first: the remembered LAN server (`LanHost`), then the pinned, saved and named hosts. `onPreferred` is called at most once per scan, with the server a scan the developer started should select when nothing is pinned. A custom scanner must add both to its `scan` override, and may ignore them.
+
+### Features
+
+- An emulator or simulator no longer stops at the alias for the host machine. After checking it, the scanner sweeps up to two /24s of the LAN the host is on. It takes them from the host's own addresses, which its server can list in an `x-dev-lan` header, and then from the device's own LAN address unless it is in the Android emulator's NAT. When neither names a LAN, it uses the routers in `routerAddresses` that accept or refuse a connection on port 80 or 53, in the order listed, probed while the alias is checked. Last come the addresses the developer has used. Each sweep works like a phone's, centred on the first of those addresses in the subnet, and lists the host by its LAN address as well as by the alias.
+- A LAN server the developer used or a scan found is remembered as `LanHost`, apart from the last server used, and is among the first addresses a scan takes. An emulator keeps sweeping that network after the developer selects its alias, unless networks that rank higher already fill both /24s.
+- The scan's label reads `emulator host` while the alias is checked and names the subnet during each sweep. Its final label names both, as in `emulator host and 192.168.0.0/24`.
+- A scan the developer starts on an emulator selects the alias the moment it answers, if nothing is pinned or the alias is itself the pinned server. Otherwise it waits for the end of the scan and selects the pinned server if it found it, or else the alias. The scan that runs when the screen opens still only lists.
+
+### Configuration
+
+- `DiscoveryConfig.lanAddressHeader` (default `x-dev-lan`) names the response header a server can use to list its own LAN IPv4 addresses, separated by commas or on repeated lines. `null` turns it off.
+- `DiscoveryConfig.emulatorConnectTimeout` (default 1.5 s) is the sweep's TCP probe on an emulator, where every connection crosses the emulator's NAT and takes up to about a second.
+- `DiscoveryConfig.routerAddresses` (default `DiscoveryConfig.defaultRouterAddresses`, common home, office and hotspot routers) is where an emulator looks for the host's router when nothing else names its LAN.
+- `DevSetupStore` keeps a `LanHost` key, read and written with `lanHost()` and `setLanHost()`.
+
+### Probing
+
+- A failed TCP probe is read by its OS error code first. A refused connection counts as a live host, and an unreachable network or a host reported down as a dead one, however long either took. Any other failure falls back to the timing rule, an unreachable host included: Linux reports a firewall's administratively prohibited reject that way, from a host that may serve another port. `tcpProbe` takes an optional `timeout`, `connectTimeout` by default.
+
+### API
+
+- `DevServerDiscovery.emulatorSubnets` returns the subnets an emulator sweeps, each with the octet its walk starts from, and `DevServerDiscovery.classifyConnectError` reads a failed connection. `candidatePhases` takes `knownHosts`, `exclude` for hosts never to propose, and `isLan` for which known hosts count.
+- `DevServerDiscovery` takes `emulatorHost`, `isLanAddress` and `routerProbe` overrides, and has a static `routerAnswers` with a `connect` override, all marked `@visibleForTesting`, so tests can run the emulator path against loopback without probing real routers.
+
+### Screen
+
+- The status card is more compact, and tapping anywhere on it copies the URL.
+
 ## 0.1.0
 
 Initial release.

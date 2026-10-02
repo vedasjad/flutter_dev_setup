@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter_dev_setup/flutter_dev_setup.dart';
@@ -34,10 +35,105 @@ DiscoveryConfig configFor(int port) => DiscoveryConfig(
   ports: [port],
   healthPath: '/api/ping',
   isHealthy: (status, body) => status == 200 && body.contains('Success'),
+  routerAddresses: const [],
   connectTimeout: const Duration(milliseconds: 300),
   verifyTimeout: const Duration(seconds: 2),
   concurrency: 128,
 );
+
+DiscoveryConfig emulatorConfigFor(
+  int port, {
+  List<String> routers = const [],
+}) => DiscoveryConfig(
+  ports: [port],
+  healthPath: '/api/ping',
+  isHealthy: (status, body) => status == 200 && body.contains('Success'),
+  routerAddresses: routers,
+  emulatorConnectTimeout: const Duration(milliseconds: 300),
+  verifyTimeout: const Duration(seconds: 2),
+  concurrency: 128,
+);
+
+/// The health check of a host machine that lists its LAN addresses, one
+/// header line per entry.
+void Function(HttpRequest request) answerPingListing(List<String> lan) =>
+    (request) {
+      request.response.headers.noFolding('x-dev-lan');
+      for (final line in lan) {
+        request.response.headers.add('x-dev-lan', line);
+      }
+      answerPing(request);
+    };
+
+/// Loopback stands in for the LAN.
+bool loopbackIsLan(String ip) => ip.startsWith('127.');
+
+/// Nothing listens there for a server bound to IPv4 loopback.
+const deadAlias = '::1';
+
+/// What an emulator scan reported, in order.
+class ScanLog {
+  final found = <String>[];
+  final preferred = <String>[];
+  final subnets = <String>[];
+  final events = <String>[];
+  final labels = <String>[];
+  var lastProbed = 0;
+  var lastTotal = 0;
+
+  Future<ScanSummary> run(
+    DevServerDiscovery discovery, {
+    String? currentHost,
+    String? rememberedHost,
+    Iterable<String> knownHosts = const [],
+  }) => discovery.scan(
+    currentHost: currentHost,
+    rememberedHost: rememberedHost,
+    knownHosts: knownHosts,
+    onFound: (server) {
+      found.add(server.host);
+      events.add('found ${server.host}');
+    },
+    onPreferred: (server) {
+      preferred.add(server.host);
+      events.add('preferred ${server.host}');
+    },
+    onSubnet: (base) {
+      subnets.add(base);
+      events.add('subnet $base');
+    },
+    onProgress: (probed, total, label) {
+      if (labels.isEmpty || labels.last != label) labels.add(label);
+      lastProbed = probed;
+      lastTotal = total;
+    },
+  );
+}
+
+/// Records each TCP probe as `host:port`, with its budget, and answers it
+/// without a socket: refused for the hosts in [live], dead for the rest.
+class ProbeRecorder extends DevServerDiscovery {
+  ProbeRecorder({
+    required super.config,
+    required super.isEmulator,
+    required super.lanAddress,
+    super.emulatorHost,
+    super.isLanAddress,
+    super.routerProbe,
+    this.live = const {},
+  });
+
+  final Set<String> live;
+  final probes = <String>[];
+  final budgets = <Duration?>{};
+
+  @override
+  Future<PortState> tcpProbe(String host, int port, {Duration? timeout}) async {
+    probes.add('$host:$port');
+    budgets.add(timeout);
+    return live.contains(host) ? PortState.refused : PortState.dead;
+  }
+}
 
 Future<bool> canBind(InternetAddress address) async {
   try {
@@ -320,8 +416,10 @@ Future<void> main() async {
     final summary = await DevServerDiscovery(
       config: configFor(port),
       isEmulator: () async => true,
+      lanAddress: () async => null,
     ).scan(onFound: found.add);
     expect(summary.outcome, ScanOutcome.found);
+    expect(summary.label, 'emulator host');
     expect(found.single.port, port);
   });
 
@@ -361,5 +459,474 @@ Future<void> main() async {
     final scanning = discovery.scan(onFound: (_) {});
     discovery.cancel();
     expect((await scanning).outcome, ScanOutcome.cancelled);
+  });
+
+  test('a router answers by accepting or refusing, never by staying '
+      'silent or unreachable', () async {
+    final open = await ServerSocket.bind(InternetAddress.loopbackIPv4, 0);
+    addTearDown(open.close);
+    open.listen((socket) => socket.destroy());
+    final spare = await ServerSocket.bind(InternetAddress.loopbackIPv4, 0);
+    final closedPort = spare.port;
+    await spare.close();
+    const timeout = Duration(milliseconds: 300);
+    Future<bool> answers(List<int> ports) => DevServerDiscovery.routerAnswers(
+      '127.0.0.1',
+      ports: ports,
+      timeout: timeout,
+    );
+    Future<bool> failingWith(int errorCode) => DevServerDiscovery.routerAnswers(
+      '192.0.2.1',
+      timeout: timeout,
+      connect: (host, port, {timeout}) =>
+          Future.error(SocketException('', osError: OSError('', errorCode))),
+    );
+    const timedOut = 110;
+
+    expect(await answers([open.port]), isTrue);
+    expect(await answers([closedPort]), isTrue);
+    expect(await failingWith(timedOut), isFalse);
+    for (final (hostUnreachable, netUnreachable) in [(113, 101), (65, 51)]) {
+      expect(await failingWith(hostUnreachable), isFalse);
+      expect(await failingWith(netUnreachable), isFalse);
+    }
+  });
+
+  test('a router counts when either port 80 or port 53 answers', () async {
+    final open = await ServerSocket.bind(InternetAddress.loopbackIPv4, 0);
+    addTearDown(open.close);
+    open.listen((socket) => socket.destroy());
+    const timedOut = SocketException('', osError: OSError('', 110));
+    final tried = <int>[];
+    Future<bool> answeringOn(int answering) => DevServerDiscovery.routerAnswers(
+      '192.0.2.1',
+      timeout: const Duration(milliseconds: 300),
+      connect: (host, port, {timeout}) {
+        tried.add(port);
+        return port == answering
+            ? Socket.connect(InternetAddress.loopbackIPv4, open.port)
+            : Future.error(timedOut);
+      },
+    );
+
+    expect(await answeringOn(80), isTrue);
+    expect(await answeringOn(53), isTrue);
+    expect(tried, [80, 53, 80, 53]);
+  });
+
+  test('a physical device never reports a preferred server', () async {
+    final found = <DevServer>[];
+    final preferred = <DevServer>[];
+    final summary = await DevServerDiscovery(
+      config: configFor(port),
+      isEmulator: () async => false,
+      lanAddress: () async => '127.0.0.254',
+    ).scan(onFound: found.add, onPreferred: preferred.add);
+    expect(summary.outcome, ScanOutcome.found);
+    expect(found.map((s) => s.host), contains('127.0.0.1'));
+    expect(preferred, isEmpty);
+  }, timeout: const Timeout(Duration(seconds: 30)));
+
+  test('a phone probes within connectTimeout and an emulator within '
+      'emulatorConnectTimeout, fallback ports included', () async {
+    final spare = await ServerSocket.bind(InternetAddress.loopbackIPv4, 0);
+    final deadPort = spare.port;
+    await spare.close();
+    final config = DiscoveryConfig(
+      ports: [port, deadPort],
+      routerAddresses: const [],
+      connectTimeout: const Duration(milliseconds: 100),
+      emulatorConnectTimeout: const Duration(milliseconds: 900),
+    );
+    ProbeRecorder recorder({required bool emulator}) => ProbeRecorder(
+      config: config,
+      isEmulator: () async => emulator,
+      lanAddress: () async => '192.168.77.50',
+      emulatorHost: deadAlias,
+      live: {'192.168.77.20'},
+    );
+
+    final phone = recorder(emulator: false);
+    await phone.scan(onFound: (_) {});
+    final emulator = recorder(emulator: true);
+    await emulator.scan(onFound: (_) {});
+
+    for (final (recorded, budget, length) in [
+      (phone, config.connectTimeout, 254),
+      (emulator, config.emulatorConnectTimeout, 255),
+    ]) {
+      expect(recorded.probes, hasLength(length));
+      expect(recorded.probes, contains('192.168.77.20:$deadPort'));
+      expect(recorded.budgets, {budget});
+    }
+    expect(phone.probes, isNot(contains('192.168.77.50:$port')));
+    expect(emulator.probes, contains('192.168.77.50:$port'));
+  });
+
+  group('on an emulator', () {
+    DevServerDiscovery emulator({
+      required int port,
+      required String alias,
+      String? lanAddress,
+      List<String> routers = const [],
+      Future<bool> Function(String host)? routerProbe,
+    }) => DevServerDiscovery(
+      config: emulatorConfigFor(port, routers: routers),
+      isEmulator: () async => true,
+      lanAddress: () async => lanAddress,
+      emulatorHost: alias,
+      isLanAddress: loopbackIsLan,
+      routerProbe: routerProbe,
+    );
+
+    test('reports the alias as found and preferred', () async {
+      final log = ScanLog();
+      final summary = await log.run(
+        emulator(port: port, alias: '127.0.0.1', lanAddress: '10.0.2.16'),
+      );
+      expect(log.events, ['found 127.0.0.1', 'preferred 127.0.0.1']);
+      expect(log.labels, ['emulator host']);
+      expect(summary.outcome, ScanOutcome.found);
+      expect(summary.label, 'emulator host');
+      expect(summary.subnetBase, isNull);
+      expect(summary.fallback, isNull);
+    });
+
+    test('with no LAN in sight, offers a dead alias anyway', () async {
+      final log = ScanLog();
+      final summary = await log.run(
+        emulator(port: port, alias: deadAlias, lanAddress: '10.0.2.16'),
+      );
+      expect(log.events, isEmpty);
+      expect(summary.outcome, ScanOutcome.notFound);
+      expect(summary.label, 'emulator host');
+      expect(summary.subnetBase, isNull);
+      expect(summary.fallback?.endpoint, '[::1]:$port');
+      expect(summary.fallback?.latencyMs, 0);
+    });
+
+    test(
+      'sweeps the subnet of its own LAN address when the alias is dead',
+      () async {
+        final log = ScanLog();
+        final summary = await log.run(
+          emulator(port: port, alias: deadAlias, lanAddress: '127.0.0.254'),
+        );
+        expect(log.events, ['subnet 127.0.0.', 'found 127.0.0.1']);
+        expect(log.labels, ['emulator host', '127.0.0.0/24']);
+        expect(log.lastProbed, 254);
+        expect(log.lastTotal, 254);
+        expect(summary.outcome, ScanOutcome.found);
+        expect(summary.label, 'emulator host and 127.0.0.0/24');
+        expect(summary.subnetBase, '127.0.0.');
+        expect(summary.fallback, isNull);
+      },
+      timeout: const Timeout(Duration(seconds: 30)),
+    );
+
+    test('reports the alias as preferred before it sweeps', () async {
+      final log = ScanLog();
+      final summary = await log.run(
+        emulator(port: port, alias: '127.0.0.1', lanAddress: '127.0.0.254'),
+      );
+      expect(log.events, [
+        'found 127.0.0.1',
+        'preferred 127.0.0.1',
+        'subnet 127.0.0.',
+      ]);
+      expect(log.lastTotal, 253);
+      expect(summary.outcome, ScanOutcome.found);
+      expect(summary.label, 'emulator host and 127.0.0.0/24');
+    }, timeout: const Timeout(Duration(seconds: 30)));
+
+    test(
+      'lists the host by the address it lists as well as by the alias',
+      () async {
+        final host = await serve(answerPingListing(['127.0.0.1']));
+        addTearDown(() => host.close(force: true));
+        final log = ScanLog();
+
+        final summary = await log.run(
+          emulator(port: host.port, alias: 'localhost'),
+        );
+
+        expect(log.found, ['localhost', '127.0.0.1']);
+        expect(log.subnets, ['127.0.0.']);
+        expect(log.lastTotal, 254);
+        expect(summary.label, 'emulator host and 127.0.0.0/24');
+      },
+      timeout: const Timeout(Duration(seconds: 30)),
+    );
+
+    test(
+      'sweeps at most two subnets the host lists, however the lines split',
+      () async {
+        final host = await serve(
+          answerPingListing(['127.0.0.5, not-an-ip', '127.0.1.5', '127.0.2.5']),
+        );
+        addTearDown(() => host.close(force: true));
+        final log = ScanLog();
+
+        final summary = await log.run(
+          emulator(port: host.port, alias: '127.0.0.1'),
+        );
+
+        expect(log.subnets, ['127.0.0.', '127.0.1.']);
+        expect(log.labels, ['emulator host', '127.0.0.0/24', '127.0.1.0/24']);
+        expect(log.found, ['127.0.0.1']);
+        expect(summary.outcome, ScanOutcome.found);
+        expect(summary.label, 'emulator host and 127.0.0.0/24, 127.0.1.0/24');
+        expect(summary.subnetBase, '127.0.0.');
+      },
+      timeout: const Timeout(Duration(seconds: 30)),
+    );
+
+    test('ignores the list when lanAddressHeader is off', () async {
+      final host = await serve(answerPingListing(['127.0.0.5']));
+      addTearDown(() => host.close(force: true));
+      final log = ScanLog();
+
+      final summary = await log.run(
+        DevServerDiscovery(
+          config: DiscoveryConfig(
+            ports: [host.port],
+            healthPath: '/api/ping',
+            lanAddressHeader: null,
+            routerAddresses: const [],
+          ),
+          isEmulator: () async => true,
+          lanAddress: () async => null,
+          emulatorHost: '127.0.0.1',
+          isLanAddress: loopbackIsLan,
+        ),
+      );
+
+      expect(log.subnets, isEmpty);
+      expect(summary.label, 'emulator host');
+    });
+
+    test(
+      'sweeps around a host the developer used when nothing else names a LAN',
+      () async {
+        final log = ScanLog();
+        final summary = await log.run(
+          emulator(port: port, alias: deadAlias),
+          knownHosts: ['box.tailnet.example', '127.0.0.9'],
+        );
+        expect(log.subnets, ['127.0.0.']);
+        expect(log.lastTotal, 254);
+        expect(log.found, ['127.0.0.1']);
+        expect(summary.outcome, ScanOutcome.found);
+        expect(summary.label, 'emulator host and 127.0.0.0/24');
+      },
+      timeout: const Timeout(Duration(seconds: 30)),
+    );
+
+    test('takes the URL field, then the last server, then other hosts used, '
+        'and probes them first', () async {
+      final discovery = ProbeRecorder(
+        config: emulatorConfigFor(port),
+        isEmulator: () async => true,
+        lanAddress: () async => null,
+        emulatorHost: deadAlias,
+        isLanAddress: loopbackIsLan,
+      );
+      final log = ScanLog();
+
+      final summary = await log.run(
+        discovery,
+        currentHost: '127.0.3.9',
+        rememberedHost: '127.0.4.9',
+        knownHosts: ['127.0.5.9', '127.0.3.7'],
+      );
+
+      expect(log.subnets, ['127.0.3.', '127.0.4.']);
+      expect(discovery.probes, hasLength(508));
+      expect(discovery.probes.take(3), [
+        '127.0.3.9:$port',
+        '127.0.3.7:$port',
+        '127.0.3.100:$port',
+      ]);
+      expect(discovery.probes[254], '127.0.4.9:$port');
+      expect(summary.label, 'emulator host and 127.0.3.0/24, 127.0.4.0/24');
+    });
+
+    test('with nothing answering anywhere, offers the alias anyway', () async {
+      final spare = await ServerSocket.bind(InternetAddress.loopbackIPv4, 0);
+      final deadPort = spare.port;
+      await spare.close();
+      final log = ScanLog();
+
+      final summary = await log.run(
+        emulator(port: deadPort, alias: deadAlias, lanAddress: '127.0.0.254'),
+      );
+
+      expect(log.found, isEmpty);
+      expect(summary.outcome, ScanOutcome.notFound);
+      expect(summary.label, 'emulator host and 127.0.0.0/24');
+      expect(summary.subnetBase, '127.0.0.');
+      expect(summary.fallback?.endpoint, '[::1]:$deadPort');
+    }, timeout: const Timeout(Duration(seconds: 30)));
+
+    test('sweeps the subnet of a router that answers when nothing else names '
+        'a LAN', () async {
+      final log = ScanLog();
+      final summary = await log.run(
+        emulator(
+          port: port,
+          alias: deadAlias,
+          lanAddress: '10.0.2.16',
+          routers: ['127.0.9.1', '127.0.0.1'],
+          routerProbe: (host) async => host == '127.0.0.1',
+        ),
+      );
+      expect(log.subnets, ['127.0.0.']);
+      expect(log.found, ['127.0.0.1']);
+      expect(summary.outcome, ScanOutcome.found);
+      expect(summary.label, 'emulator host and 127.0.0.0/24');
+    }, timeout: const Timeout(Duration(seconds: 30)));
+
+    test(
+      'puts the routers that answer ahead of hosts the developer used',
+      () async {
+        final log = ScanLog();
+        await log.run(
+          emulator(
+            port: port,
+            alias: '127.0.0.1',
+            routers: ['127.0.5.1', '127.0.6.1'],
+            routerProbe: (host) async => host == '127.0.6.1',
+          ),
+          currentHost: '127.0.7.9',
+        );
+        expect(log.subnets, ['127.0.6.', '127.0.7.']);
+      },
+      timeout: const Timeout(Duration(seconds: 30)),
+    );
+
+    test('by default sweeps the LAN behind a cable modem before the '
+        "modem's own network", () async {
+      final discovery = ProbeRecorder(
+        config: DiscoveryConfig(ports: [port]),
+        isEmulator: () async => true,
+        lanAddress: () async => '10.0.2.16',
+        emulatorHost: deadAlias,
+        routerProbe: (host) async =>
+            {'192.168.100.1', '10.0.0.1'}.contains(host),
+      );
+      final log = ScanLog();
+
+      await log.run(discovery);
+
+      expect(log.subnets, ['10.0.0.', '192.168.100.']);
+    });
+
+    test('sweeps two subnets at most, however many routers answer', () async {
+      final discovery = ProbeRecorder(
+        config: emulatorConfigFor(
+          port,
+          routers: ['192.168.0.1', '192.168.1.1', '10.0.0.1'],
+        ),
+        isEmulator: () async => true,
+        lanAddress: () async => '10.0.2.16',
+        emulatorHost: deadAlias,
+        routerProbe: (_) async => true,
+      );
+      final log = ScanLog();
+
+      await log.run(discovery, currentHost: '172.16.0.9');
+
+      expect(log.subnets, ['192.168.0.', '192.168.1.']);
+    });
+
+    test('ignores the routers when the host lists its LAN', () async {
+      final host = await serve(answerPingListing(['127.0.0.5']));
+      addTearDown(() => host.close(force: true));
+      final log = ScanLog();
+
+      await log.run(
+        emulator(
+          port: host.port,
+          alias: '127.0.0.1',
+          routers: ['127.0.6.1'],
+          routerProbe: (_) async => true,
+        ),
+      );
+
+      expect(log.subnets, ['127.0.0.']);
+    }, timeout: const Timeout(Duration(seconds: 30)));
+
+    test('probes no router when the device address names the LAN', () async {
+      final probed = <String>[];
+      final log = ScanLog();
+
+      await log.run(
+        emulator(
+          port: port,
+          alias: '127.0.0.1',
+          lanAddress: '127.0.0.254',
+          routers: ['127.0.6.1'],
+          routerProbe: (host) async {
+            probed.add(host);
+            return true;
+          },
+        ),
+      );
+
+      expect(probed, isEmpty);
+      expect(log.subnets, ['127.0.0.']);
+    }, timeout: const Timeout(Duration(seconds: 30)));
+
+    test('probes the routers while it checks the alias', () async {
+      final aliasAsked = Completer<void>();
+      final host = await serve((request) {
+        if (!aliasAsked.isCompleted) aliasAsked.complete();
+        answerPing(request);
+      });
+      addTearDown(() => host.close(force: true));
+      var probedDuringCheck = false;
+
+      await emulator(
+        port: host.port,
+        alias: '127.0.0.1',
+        routers: ['127.0.6.1'],
+        routerProbe: (_) async {
+          await aliasAsked.future.timeout(
+            const Duration(seconds: 2),
+            onTimeout: () {},
+          );
+          probedDuringCheck = aliasAsked.isCompleted;
+          return false;
+        },
+      ).scan(onFound: (_) {});
+
+      expect(probedDuringCheck, isTrue);
+    });
+
+    test('stops within a sweep, and before the next, when cancelled', () async {
+      final host = await serve(answerPingListing(['127.0.0.5', '127.0.1.5']));
+      addTearDown(() => host.close(force: true));
+      final discovery = emulator(port: host.port, alias: '127.0.0.1');
+      final subnets = <String>[];
+      var probed = 0;
+      var total = 0;
+
+      final summary = await discovery.scan(
+        onFound: (_) {},
+        onSubnet: subnets.add,
+        onProgress: (done, all, label) {
+          if (label == 'emulator host') return;
+          probed = done;
+          total = all;
+          if (done >= 5) discovery.cancel();
+        },
+      );
+
+      expect(subnets, ['127.0.0.']);
+      expect(probed, lessThan(total));
+      expect(summary.outcome, ScanOutcome.cancelled);
+      expect(summary.subnetBase, '127.0.0.');
+      expect(summary.label, 'emulator host and 127.0.0.0/24');
+    });
   });
 }

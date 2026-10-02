@@ -4,6 +4,7 @@ import 'dart:ui' show Tristate;
 
 import 'package:flutter/material.dart';
 import 'package:flutter/semantics.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_dev_setup/flutter_dev_setup.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -565,6 +566,7 @@ void main() {
     final copy = tester.getSemantics(find.byTooltip('Copy URL'));
     expect(copy.getSemanticsData().tooltip, 'Copy URL');
     expect(copy.getSemanticsData().hasAction(SemanticsAction.tap), isTrue);
+    expect(copy.getSemanticsData().flagsCollection.isButton, isTrue);
 
     // The guideline skips nodes inside the dialog's scroll view.
     await tester.tap(find.byTooltip('Add an address'));
@@ -578,6 +580,30 @@ void main() {
       greaterThanOrEqualTo(kMinInteractiveDimension),
     );
     semantics.dispose();
+  });
+
+  testWidgets('tapping the status card away from its icon copies the URL', (
+    tester,
+  ) async {
+    final copied = <String>[];
+    final messenger = tester.binding.defaultBinaryMessenger;
+    messenger.setMockMethodCallHandler(SystemChannels.platform, (call) async {
+      if (call.method == 'Clipboard.setData') {
+        copied.add((call.arguments as Map)['text'] as String);
+      }
+      return null;
+    });
+    addTearDown(
+      () => messenger.setMockMethodCallHandler(SystemChannels.platform, null),
+    );
+    final c = await buildController();
+    await pumpScreen(tester, c);
+
+    await tester.tap(find.text(defaultUrl));
+    await tester.pumpAndSettle();
+
+    expect(copied, [defaultUrl]);
+    expect(find.text('Copied $defaultUrl'), findsOneWidget);
   });
 
   testWidgets('a screen that made its own controller reports to the latest '

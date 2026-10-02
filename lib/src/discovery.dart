@@ -17,21 +17,35 @@ enum PortState { open, refused, dead }
 /// The device's own address is never the answer on a physical handset — the
 /// server runs on a laptop — so it sweeps the /24 and verifies every responder
 /// against the health check rather than trusting an open port.
+///
+/// On an emulator it checks the fixed alias for the host machine first, then
+/// sweeps the LAN that the host's server, the device's own address, a router
+/// from [DiscoveryConfig.routerAddresses] that answers, or the developer's
+/// history points to; see [emulatorSubnets].
 class DevServerDiscovery implements DevServerScanner {
   DevServerDiscovery({
     this.config = const DiscoveryConfig(),
     Future<bool> Function()? isEmulator,
     Future<String?> Function()? lanAddress,
     @visibleForTesting HttpClient Function()? httpClient,
+    @visibleForTesting String? emulatorHost,
+    @visibleForTesting bool Function(String ip)? isLanAddress,
+    @visibleForTesting Future<bool> Function(String host)? routerProbe,
   }) : assert(config.ports.isNotEmpty, 'DiscoveryConfig.ports is empty'),
        _isEmulator = isEmulator ?? detectEmulator,
        _lanAddress = lanAddress ?? deviceLanAddress,
-       _newHttpClient = httpClient ?? HttpClient.new;
+       _newHttpClient = httpClient ?? HttpClient.new,
+       _emulatorHost = emulatorHost,
+       _isLanAddress = isLanAddress ?? isPrivateIpv4,
+       _routerProbe = routerProbe;
 
   final DiscoveryConfig config;
   final HttpClient Function() _newHttpClient;
   final Future<bool> Function() _isEmulator;
   final Future<String?> Function() _lanAddress;
+  final String? _emulatorHost;
+  final bool Function(String ip) _isLanAddress;
+  final Future<bool> Function(String host)? _routerProbe;
 
   static const List<String> _skipInterfacePrefixes = [
     'awdl',
@@ -56,6 +70,9 @@ class DevServerDiscovery implements DevServerScanner {
 
   static const int _bodyLimit = 1 << 20;
 
+  /// The Android emulator's own network, behind its NAT.
+  static const String _emulatorNat = '10.0.2.';
+
   bool _cancelled = false;
 
   @override
@@ -66,7 +83,9 @@ class DevServerDiscovery implements DevServerScanner {
     String? currentHost,
     String? rememberedHost,
     int? rememberedOctet,
+    Iterable<String> knownHosts = const [],
     required void Function(DevServer server) onFound,
+    void Function(DevServer server)? onPreferred,
     void Function(String subnetBase)? onSubnet,
     void Function(int probed, int total, String label)? onProgress,
   }) async {
@@ -74,26 +93,13 @@ class DevServerDiscovery implements DevServerScanner {
     final foundHosts = <String>{};
 
     if (await _isEmulator()) {
-      final host = Platform.isAndroid ? '10.0.2.2' : '127.0.0.1';
-      const label = 'emulator host';
-      final ports = config.ports;
-      onProgress?.call(0, ports.length, label);
-      for (var i = 0; i < ports.length; i++) {
-        if (_cancelled) return const ScanSummary(ScanOutcome.cancelled);
-        final server = await verify(host, ports[i]);
-        onProgress?.call(i + 1, ports.length, label);
-        if (server != null && foundHosts.add(host)) {
-          onFound(await _named(server));
-        }
-      }
-      if (foundHosts.isNotEmpty) {
-        return const ScanSummary(ScanOutcome.found, label: label);
-      }
-      // The alias is right even before the server is up, so offer it anyway.
-      return ScanSummary(
-        ScanOutcome.notFound,
-        label: label,
-        fallback: DevServer(host: host, port: config.primaryPort, latencyMs: 0),
+      return _scanFromEmulator(
+        hints: [?currentHost, ?rememberedHost, ...knownHosts],
+        foundHosts: foundHosts,
+        onFound: onFound,
+        onPreferred: onPreferred,
+        onSubnet: onSubnet,
+        onProgress: onProgress,
       );
     }
 
@@ -106,58 +112,23 @@ class DevServerDiscovery implements DevServerScanner {
 
     onSubnet?.call(subnetBase);
     final label = '${subnetBase}0/24';
-    final phases = candidatePhases(
-      subnetBase: subnetBase,
-      ownOctet: ownOctet,
-      rememberedHost: rememberedHost,
-      currentHost: currentHost,
-      rememberedOctet: rememberedOctet,
-      bandStart: config.leaseBandStart,
-      bandEnd: config.leaseBandEnd,
+    final finished = await _sweepSubnet(
+      candidatePhases(
+        subnetBase: subnetBase,
+        ownOctet: ownOctet,
+        rememberedHost: rememberedHost,
+        currentHost: currentHost,
+        rememberedOctet: rememberedOctet,
+        bandStart: config.leaseBandStart,
+        bandEnd: config.leaseBandEnd,
+      ),
+      label: label,
+      connectTimeout: config.connectTimeout,
+      foundHosts: foundHosts,
+      onFound: onFound,
+      onProgress: onProgress,
     );
-    final total = phases.fold<int>(0, (sum, phase) => sum + phase.length);
-    onProgress?.call(0, total, label);
-
-    final liveHosts = <String>{};
-    var done = 0;
-    for (final phase in phases) {
-      if (phase.isEmpty) continue;
-      final offset = done;
-      await _sweep(
-        phase,
-        config.primaryPort,
-        liveHosts: liveHosts,
-        foundHosts: foundHosts,
-        onFound: onFound,
-        onProbed: (probed) => onProgress?.call(offset + probed, total, label),
-      );
-      if (_cancelled) {
-        return ScanSummary(
-          ScanOutcome.cancelled,
-          subnetBase: subnetBase,
-          label: label,
-        );
-      }
-      done += phase.length;
-      onProgress?.call(done, total, label);
-    }
-
-    // Only hosts that answered the primary sweep — with a connection or a
-    // refusal — are known to be up, so other ports cost a handful of probes
-    // rather than another full pass.
-    final alternates = liveHosts.difference(foundHosts).toList();
-    for (final port in config.fallbackPorts) {
-      if (_cancelled || alternates.isEmpty) break;
-      await _sweep(
-        alternates,
-        port,
-        liveHosts: {},
-        foundHosts: foundHosts,
-        onFound: onFound,
-      );
-    }
-
-    if (_cancelled) {
+    if (!finished) {
       return ScanSummary(
         ScanOutcome.cancelled,
         subnetBase: subnetBase,
@@ -171,9 +142,192 @@ class DevServerDiscovery implements DevServerScanner {
     );
   }
 
+  Future<ScanSummary> _scanFromEmulator({
+    required List<String> hints,
+    required Set<String> foundHosts,
+    required void Function(DevServer server) onFound,
+    void Function(DevServer server)? onPreferred,
+    void Function(String subnetBase)? onSubnet,
+    void Function(int probed, int total, String label)? onProgress,
+  }) async {
+    final host =
+        _emulatorHost ?? (Platform.isAndroid ? '10.0.2.2' : '127.0.0.1');
+    const hostLabel = 'emulator host';
+    final deviceAddress = await _lanAddress();
+    final deviceNamesLan = emulatorSubnets(
+      deviceAddress: deviceAddress,
+      isLan: _isLanAddress,
+    ).isNotEmpty;
+    final routers = deviceNamesLan ? null : _answeringRouters();
+    final ports = config.ports;
+    final advertised = <String>[];
+    onProgress?.call(0, ports.length, hostLabel);
+    for (var i = 0; i < ports.length; i++) {
+      if (_cancelled) return const ScanSummary(ScanOutcome.cancelled);
+      final answer = await _check(host, ports[i]);
+      onProgress?.call(i + 1, ports.length, hostLabel);
+      if (answer == null) continue;
+      advertised.addAll(answer.lan);
+      if (!foundHosts.add(host)) continue;
+      final server = await _named(answer.server);
+      onFound(server);
+      onPreferred?.call(server);
+    }
+    if (_cancelled) return const ScanSummary(ScanOutcome.cancelled);
+
+    final hostNamesLan = emulatorSubnets(
+      advertised: advertised,
+      isLan: _isLanAddress,
+    ).isNotEmpty;
+    final subnets = emulatorSubnets(
+      advertised: advertised,
+      deviceAddress: deviceAddress,
+      hints: [if (routers != null && !hostNamesLan) ...await routers, ...hints],
+      isLan: _isLanAddress,
+    );
+    final swept = <String>[];
+    for (final subnet in subnets) {
+      if (_cancelled) break;
+      swept.add(subnet.subnetBase);
+      onSubnet?.call(subnet.subnetBase);
+      await _sweepSubnet(
+        candidatePhases(
+          subnetBase: subnet.subnetBase,
+          ownOctet: subnet.centre,
+          knownHosts: hints,
+          exclude: foundHosts,
+          isLan: _isLanAddress,
+          bandStart: config.leaseBandStart,
+          bandEnd: config.leaseBandEnd,
+        ),
+        label: '${subnet.subnetBase}0/24',
+        connectTimeout: config.emulatorConnectTimeout,
+        foundHosts: foundHosts,
+        onFound: onFound,
+        onProgress: onProgress,
+      );
+    }
+
+    final label = swept.isEmpty
+        ? hostLabel
+        : '$hostLabel and ${swept.map((base) => '${base}0/24').join(', ')}';
+    final subnetBase = swept.firstOrNull;
+    if (_cancelled) {
+      return ScanSummary(
+        ScanOutcome.cancelled,
+        subnetBase: subnetBase,
+        label: label,
+      );
+    }
+    if (foundHosts.isNotEmpty) {
+      return ScanSummary(
+        ScanOutcome.found,
+        subnetBase: subnetBase,
+        label: label,
+      );
+    }
+    // The alias is right even before the server is up, so offer it anyway.
+    return ScanSummary(
+      ScanOutcome.notFound,
+      subnetBase: subnetBase,
+      label: label,
+      fallback: DevServer(host: host, port: config.primaryPort, latencyMs: 0),
+    );
+  }
+
+  /// The [DiscoveryConfig.routerAddresses] that answer, in their order.
+  Future<List<String>> _answeringRouters() async {
+    final probe =
+        _routerProbe ??
+        (host) => routerAnswers(host, timeout: config.emulatorConnectTimeout);
+    final answered = await Future.wait([
+      for (final router in config.routerAddresses)
+        probe(router).then((up) => up ? router : null, onError: (_) => null),
+    ]);
+    return [for (final router in answered) ?router];
+  }
+
+  /// Whether [host] accepts or refuses a connection on any of [ports]. Only
+  /// an explicit refusal counts: an unreachable host or network can come back
+  /// just as fast from a router that is not on this LAN.
+  @visibleForTesting
+  static Future<bool> routerAnswers(
+    String host, {
+    List<int> ports = const [80, 53],
+    required Duration timeout,
+    Future<Socket> Function(String host, int port, {Duration? timeout})?
+    connect,
+  }) async {
+    final refused = _errorCodes(Platform.operatingSystem).refused;
+    final answers = await Future.wait([
+      for (final port in ports)
+        (connect ?? Socket.connect)(host, port, timeout: timeout).then(
+          (socket) {
+            socket.destroy();
+            return true;
+          },
+          onError: (Object error) =>
+              error is SocketException &&
+              refused.contains(error.osError?.errorCode),
+        ),
+    ]);
+    return answers.contains(true);
+  }
+
+  /// Sweeps [phases] in order on the first port, then tries the other ports
+  /// on the hosts that proved they are up. False when cancelled.
+  Future<bool> _sweepSubnet(
+    List<List<String>> phases, {
+    required String label,
+    required Duration connectTimeout,
+    required Set<String> foundHosts,
+    required void Function(DevServer server) onFound,
+    void Function(int probed, int total, String label)? onProgress,
+  }) async {
+    final total = phases.fold<int>(0, (sum, phase) => sum + phase.length);
+    onProgress?.call(0, total, label);
+
+    final liveHosts = <String>{};
+    var done = 0;
+    for (final phase in phases) {
+      if (phase.isEmpty) continue;
+      final offset = done;
+      await _sweep(
+        phase,
+        config.primaryPort,
+        connectTimeout: connectTimeout,
+        liveHosts: liveHosts,
+        foundHosts: foundHosts,
+        onFound: onFound,
+        onProbed: (probed) => onProgress?.call(offset + probed, total, label),
+      );
+      if (_cancelled) return false;
+      done += phase.length;
+      onProgress?.call(done, total, label);
+    }
+
+    // Only hosts that answered the primary sweep — with a connection or a
+    // refusal — are known to be up, so other ports cost a handful of probes
+    // rather than another full pass.
+    final alternates = liveHosts.difference(foundHosts).toList();
+    for (final port in config.fallbackPorts) {
+      if (_cancelled || alternates.isEmpty) break;
+      await _sweep(
+        alternates,
+        port,
+        connectTimeout: connectTimeout,
+        liveHosts: {},
+        foundHosts: foundHosts,
+        onFound: onFound,
+      );
+    }
+    return !_cancelled;
+  }
+
   Future<void> _sweep(
     List<String> hosts,
     int port, {
+    required Duration connectTimeout,
     required Set<String> liveHosts,
     required Set<String> foundHosts,
     required void Function(DevServer server) onFound,
@@ -186,7 +340,7 @@ class DevServerDiscovery implements DevServerScanner {
       while (true) {
         if (_cancelled || next >= hosts.length) return;
         final host = hosts[next++];
-        final state = await tcpProbe(host, port);
+        final state = await tcpProbe(host, port, timeout: connectTimeout);
         onProbed?.call(++probed);
         if (state == PortState.dead) continue;
         liveHosts.add(host);
@@ -213,19 +367,20 @@ class DevServerDiscovery implements DevServerScanner {
     return name == null ? server : server.copyWith(hostname: name);
   }
 
-  Future<PortState> tcpProbe(String host, int port) async {
-    final started = DateTime.now();
+  /// [timeout] defaults to [DiscoveryConfig.connectTimeout].
+  Future<PortState> tcpProbe(String host, int port, {Duration? timeout}) async {
+    final budget = timeout ?? config.connectTimeout;
+    final elapsed = Stopwatch()..start();
     Socket? socket;
     try {
-      socket = await Socket.connect(host, port, timeout: config.connectTimeout);
+      socket = await Socket.connect(host, port, timeout: budget);
       return PortState.open;
-    } on SocketException {
-      // Refusal error codes differ per platform; the timing does not. A
-      // refusal comes back at once and still proves the host is up.
-      final elapsed = DateTime.now().difference(started);
-      return elapsed < config.connectTimeout * 0.8
-          ? PortState.refused
-          : PortState.dead;
+    } on SocketException catch (error) {
+      return classifyConnectError(
+        error.osError?.errorCode,
+        elapsed: elapsed.elapsed,
+        timeout: budget,
+      );
     } catch (_) {
       return PortState.dead;
     } finally {
@@ -233,7 +388,48 @@ class DevServerDiscovery implements DevServerScanner {
     }
   }
 
+  /// What a failed connect says about the host. A refusal proves it is up, and
+  /// an unreachable network or a host reported down counts as down, however
+  /// long either took: through an emulator's NAT a refusal can take a second,
+  /// and an address with no host behind it fails as an unreachable network.
+  /// Any other error is read by its timing, since a failure well inside
+  /// [timeout] came back from the host. That includes an unreachable host,
+  /// which is how Linux reports a firewall's administratively prohibited
+  /// reject. [operatingSystem] picks the error codes and defaults to this one.
+  static PortState classifyConnectError(
+    int? errorCode, {
+    required Duration elapsed,
+    required Duration timeout,
+    String? operatingSystem,
+  }) {
+    final (:refused, :down) = _errorCodes(
+      operatingSystem ?? Platform.operatingSystem,
+    );
+    if (refused.contains(errorCode)) return PortState.refused;
+    if (down.contains(errorCode)) return PortState.dead;
+    return elapsed < timeout * 0.8 ? PortState.refused : PortState.dead;
+  }
+
+  static ({List<int> refused, List<int> down}) _errorCodes(String os) =>
+      switch (os) {
+        'macos' || 'ios' => (refused: const [61], down: const [51, 64]),
+        // A failed connect can come back with its WinSock or its Win32 code.
+        'windows' => (
+          refused: const [10061, 1225],
+          down: const [10051, 10064, 1231, 1256],
+        ),
+        _ => (refused: const [111], down: const [101, 112]),
+      };
+
   Future<DevServer?> verify(
+    String host,
+    int port, {
+    String scheme = 'http',
+  }) async => (await _check(host, port, scheme: scheme))?.server;
+
+  /// [verify], along with the addresses the server lists in
+  /// [DiscoveryConfig.lanAddressHeader].
+  Future<({DevServer server, List<String> lan})?> _check(
     String host,
     int port, {
     String scheme = 'http',
@@ -253,12 +449,18 @@ class DevServerDiscovery implements DevServerScanner {
       final response = await request.close().timeout(config.verifyTimeout);
       final body = await _readBody(response).timeout(config.verifyTimeout);
       if (!config.isHealthy(response.statusCode, body)) return null;
-      return DevServer(
-        host: host,
-        port: port,
-        latencyMs: elapsed.elapsedMilliseconds,
-        hostname: _advertisedName(response.headers[config.hostHeader]),
-        scheme: scheme,
+      final lanHeader = config.lanAddressHeader;
+      return (
+        server: DevServer(
+          host: host,
+          port: port,
+          latencyMs: elapsed.elapsedMilliseconds,
+          hostname: _advertisedName(response.headers[config.hostHeader]),
+          scheme: scheme,
+        ),
+        lan: lanHeader == null
+            ? const <String>[]
+            : _listed(response.headers[lanHeader]),
       );
     } catch (_) {
       return null;
@@ -285,6 +487,13 @@ class DevServerDiscovery implements DevServerScanner {
     final name = values.first.split(',').first.trim();
     return name.isEmpty ? null : name;
   }
+
+  /// Every item of a header that may be repeated, comma-joined, or both.
+  static List<String> _listed(List<String>? values) => [
+    for (final value in values ?? const <String>[])
+      for (final item in value.split(','))
+        if (item.trim().isNotEmpty) item.trim(),
+  ];
 
   @override
   Future<DevServer?> verifyOrigin(String origin) async {
@@ -385,19 +594,74 @@ class DevServerDiscovery implements DevServerScanner {
 
   static int? lastOctetOf(String ip) => octetsOf(ip)?[3];
 
+  /// The /24s an emulator sweeps after the alias, best first and at most
+  /// [limit]: those of the host machine's own LAN addresses, [advertised] by
+  /// the alias; of [deviceAddress], the device's own; then of [hints], the
+  /// routers that answered and then hosts the developer has used. Only IPv4
+  /// addresses [isLan] accepts count, and none in the Android emulator's NAT,
+  /// 10.0.2.0/24. By default that rules out loopback, public addresses and
+  /// hostnames.
+  ///
+  /// Each walk is centred on the subnet's first host or device address, or
+  /// else on its first hint. Those addresses are swept like any other, so the
+  /// host is listed by its LAN address as well as by the alias.
+  static List<({String subnetBase, int centre})> emulatorSubnets({
+    Iterable<String> advertised = const [],
+    String? deviceAddress,
+    Iterable<String> hints = const [],
+    bool Function(String ip) isLan = isPrivateIpv4,
+    int limit = 2,
+  }) {
+    String? usable(String ip) {
+      final octets = octetsOf(ip);
+      if (octets == null) return null;
+      final address = octets.join('.');
+      if (subnetBaseOf(address) == _emulatorNat || !isLan(address)) {
+        return null;
+      }
+      return address;
+    }
+
+    final ranked = {
+      for (final ip in [...advertised, ?deviceAddress, ...hints]) ?usable(ip),
+    };
+    final bases = <String>{};
+    for (final ip in ranked) {
+      if (bases.length == limit) break;
+      bases.add(subnetBaseOf(ip)!);
+    }
+    return [
+      for (final base in bases)
+        (
+          subnetBase: base,
+          centre: lastOctetOf(ranked.firstWhere((ip) => ip.startsWith(base)))!,
+        ),
+    ];
+  }
+
   /// Cheapest first: hosts already known, then the lease band, then the rest of
   /// the subnet walking outward from our own octet. Each phase runs to the end
   /// before the next starts, so an earlier phase wins when two servers answer.
+  ///
+  /// [exclude] is never proposed and defaults to our own address. With nothing
+  /// to exclude, [ownOctet] is only where the walk starts, and is proposed
+  /// like any other host. A known host counts only on this subnet and if
+  /// [isLan] accepts it.
   static List<List<String>> candidatePhases({
     required String subnetBase,
     required int ownOctet,
     String? rememberedHost,
     String? currentHost,
     int? rememberedOctet,
+    Iterable<String> knownHosts = const [],
+    Iterable<String>? exclude,
+    bool Function(String ip) isLan = isPrivateIpv4,
     int bandStart = 100,
     int bandEnd = 120,
   }) {
-    final taken = <String>{'$subnetBase$ownOctet'};
+    final taken = <String>{
+      ...exclude ?? ['$subnetBase$ownOctet'],
+    };
     List<String> phase(Iterable<String> hosts) => [
       for (final host in hosts)
         if (taken.add(host)) host,
@@ -408,15 +672,16 @@ class DevServerDiscovery implements DevServerScanner {
         ?rememberedHost,
         ?currentHost,
         if (rememberedOctet != null) '$subnetBase$rememberedOctet',
-      ].where((host) => host.startsWith(subnetBase) && isPrivateIpv4(host)),
+        ...knownHosts,
+      ].where((host) => host.startsWith(subnetBase) && isLan(host)),
     );
     final band = phase([
       for (var octet = bandStart; octet <= bandEnd; octet++)
         if (octet >= 1 && octet <= 254) '$subnetBase$octet',
     ]);
     final rest = <String>[];
-    for (var distance = 1; distance <= 254; distance++) {
-      for (final octet in [ownOctet - distance, ownOctet + distance]) {
+    for (var distance = 0; distance <= 254; distance++) {
+      for (final octet in {ownOctet - distance, ownOctet + distance}) {
         if (octet >= 1 && octet <= 254) rest.add('$subnetBase$octet');
       }
     }

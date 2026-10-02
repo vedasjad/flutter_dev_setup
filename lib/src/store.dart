@@ -28,6 +28,7 @@ class DevSetupStore {
   String get pinsKey => '${keyPrefix}ServerPins';
   String get rememberedHostKey => '${keyPrefix}DiscoveredHost';
   String get rememberedOctetKey => '${keyPrefix}DiscoveredOctet';
+  String get lanHostKey => '${keyPrefix}LanHost';
 
   Future<SharedPreferences> get _prefs => SharedPreferences.getInstance();
 
@@ -106,6 +107,16 @@ class DevSetupStore {
     if (octet != null) {
       await prefs.setInt(rememberedOctetKey, octet);
     }
+  }
+
+  /// A LAN server the developer used or a scan found, kept apart from
+  /// [rememberedHost] so that choosing an emulator's alias does not lose the
+  /// network an emulator scan should sweep.
+  Future<String?> lanHost() async =>
+      _nonEmpty(_string(await _read(lanHostKey)));
+
+  Future<void> setLanHost(String host) async {
+    await (await _prefs).setString(lanHostKey, host);
   }
 
   Future<Map<String, String>> _readMap(String key) async {

@@ -603,6 +603,30 @@ void main() {
       expect(c.scanPhase, ScanPhase.found);
     });
 
+    test('tells the scanner every host the developer has used', () async {
+      SharedPreferences.setMockInitialValues({
+        'devServerPins':
+            '{"192.168.0.":"192.168.0.140","*":"box.tailnet.example"}',
+        'devCustomServers': [
+          'http://10.1.1.1:5001',
+          'https://box.tailnet.example',
+          'http://192.168.0.140:5001',
+        ],
+        'devServerLabels': '{"192.168.0.125":"laptop","10.1.1.1":"vpn"}',
+      });
+      final fake = FakeScanner();
+      final c = await buildController(scanner: fake);
+
+      await c.scan(manual: false);
+
+      expect(fake.knownHosts, [
+        '192.168.0.140',
+        'box.tailnet.example',
+        '10.1.1.1',
+        '192.168.0.125',
+      ]);
+    });
+
     test('a scanner that throws ends the scan as failed', () async {
       final reported = <FlutterErrorDetails>[];
       final previous = FlutterError.onError;
@@ -617,6 +641,336 @@ void main() {
       expect(c.scanPhase, ScanPhase.failed);
       expect(c.isScanning, isFalse);
       expect(reported.single.exception, isA<StateError>());
+    });
+  });
+
+  group('the preferred server', () {
+    const aliasUrl = 'http://10.0.2.2:5001/api/v1/';
+    final alias = server('10.0.2.2', ms: 300);
+    const pause = Duration(milliseconds: 40);
+    const midway = Duration(milliseconds: 10);
+
+    test(
+      'a manual scan with no pins selects it the moment it answers',
+      () async {
+        final committed = <String>[];
+        final c = await buildController(
+          committed: committed,
+          scanner: FakeScanner(
+            preferred: alias,
+            found: [server('192.168.0.101'), server('192.168.0.102')],
+            preferredDelay: pause,
+          ),
+        );
+
+        final scanning = c.scan();
+        await Future<void>.delayed(midway);
+        expect(c.isScanning, isTrue);
+        expect(committed, [aliasUrl]);
+        await scanning;
+
+        expect(committed, [aliasUrl]);
+        expect(c.foundCount, 3);
+      },
+    );
+
+    test('waits for the scan to end when something is pinned', () async {
+      SharedPreferences.setMockInitialValues({
+        'devServerPins': '{"192.168.0.":"192.168.0.101"}',
+      });
+      final committed = <String>[];
+      final c = await buildController(
+        committed: committed,
+        scanner: FakeScanner(
+          preferred: alias,
+          found: [server('192.168.0.101'), server('192.168.0.102')],
+          preferredDelay: pause,
+        ),
+      );
+
+      final scanning = c.scan();
+      await Future<void>.delayed(midway);
+      expect(committed, isEmpty);
+      await scanning;
+
+      expect(committed, ['http://192.168.0.101:5001/api/v1/']);
+    });
+
+    test(
+      'is selected at the end when the pinned server never answers',
+      () async {
+        SharedPreferences.setMockInitialValues({
+          'devServerPins': '{"192.168.1.":"192.168.1.50"}',
+        });
+        final committed = <String>[];
+        final c = await buildController(
+          committed: committed,
+          scanner: FakeScanner(
+            preferred: alias,
+            found: [server('192.168.0.101'), server('192.168.0.102')],
+            preferredDelay: pause,
+          ),
+        );
+
+        final scanning = c.scan();
+        await Future<void>.delayed(midway);
+        expect(committed, isEmpty);
+        await scanning;
+
+        expect(committed, [aliasUrl]);
+      },
+    );
+
+    test('is selected at once when it is itself pinned', () async {
+      SharedPreferences.setMockInitialValues({
+        'devServerPins': '{"10.0.2.":"10.0.2.2","192.168.0.":"192.168.0.101"}',
+      });
+      final committed = <String>[];
+      final c = await buildController(
+        committed: committed,
+        scanner: FakeScanner(
+          preferred: alias,
+          found: [server('192.168.0.101')],
+          preferredDelay: pause,
+        ),
+      );
+
+      final scanning = c.scan();
+      await Future<void>.delayed(midway);
+      expect(committed, [aliasUrl]);
+      await scanning;
+
+      expect(committed, [aliasUrl]);
+    });
+
+    test('an automatic scan only lists it', () async {
+      final committed = <String>[];
+      final c = await buildController(
+        committed: committed,
+        scanner: FakeScanner(preferred: alias),
+      );
+
+      await c.scan(manual: false);
+
+      expect(committed, isEmpty);
+      expect(endpoints(c), ['10.0.2.2:5001']);
+      expect(c.baseOrigin, 'https://staging.example.com');
+    });
+
+    test('a server picked before it answers is left alone', () async {
+      SharedPreferences.setMockInitialValues({
+        'devCustomServers': ['http://100.64.0.9:5001'],
+      });
+      final committed = <String>[];
+      final c = await buildController(
+        committed: committed,
+        scanner: FakeScanner(preferred: alias, scanDelay: pause),
+      );
+
+      final scanning = c.scan();
+      await Future<void>.delayed(midway);
+      await c.select(entryFor(c, '100.64.0.9:5001'));
+      await scanning;
+
+      expect(committed, ['http://100.64.0.9:5001/api/v1/']);
+      expect(c.baseOrigin, 'http://100.64.0.9:5001');
+    });
+
+    test('an address typed while it waits on a pin is left alone', () async {
+      SharedPreferences.setMockInitialValues({
+        'devServerPins': '{"192.168.1.":"192.168.1.50"}',
+      });
+      final committed = <String>[];
+      final c = await buildController(
+        committed: committed,
+        scanner: FakeScanner(
+          preferred: alias,
+          found: [server('192.168.0.101')],
+          preferredDelay: pause,
+        ),
+      );
+
+      final scanning = c.scan();
+      await Future<void>.delayed(midway);
+      c.urlController.text = '10.0.0.7:9000';
+      c.onUrlEdited();
+      await scanning;
+
+      expect(committed, isEmpty);
+      expect(c.urlController.text, '10.0.0.7:9000');
+    });
+
+    test('one from a cancelled scan is never selected', () async {
+      final committed = <String>[];
+      final c = await buildController(
+        committed: committed,
+        scanner: FakeScanner(preferred: alias, scanDelay: pause),
+      );
+
+      final scanning = c.scan();
+      await Future<void>.delayed(midway);
+      c.cancelScan();
+      await scanning;
+
+      expect(committed, isEmpty);
+      expect(c.servers, isEmpty);
+    });
+  });
+
+  group('the LAN an emulator scan sweeps', () {
+    Future<String?> storedLan() async {
+      await Future<void>.delayed(Duration.zero);
+      return testStore().lanHost();
+    }
+
+    test(
+      'is a LAN server a scan found, passed first to the next scan',
+      () async {
+        final fake = FakeScanner(
+          found: [server('10.0.2.2'), server('192.168.0.101')],
+        );
+        final c = await buildController(scanner: fake);
+
+        await c.scan(manual: false);
+        expect(await storedLan(), '192.168.0.101');
+
+        await c.scan(manual: false);
+        expect(fake.knownHosts?.first, '192.168.0.101');
+      },
+    );
+
+    test('holds still while scans keep finding the same network', () async {
+      final c = await buildController(
+        scanner: FakeScanner(
+          found: [server('192.168.0.101'), server('192.168.0.100')],
+        ),
+      );
+
+      await c.scan(manual: false);
+
+      expect(await storedLan(), '192.168.0.101');
+    });
+
+    test('moves when a scan finds a server on another network', () async {
+      SharedPreferences.setMockInitialValues({'devLanHost': '192.168.0.101'});
+      final c = await buildController(
+        scanner: FakeScanner(found: [server('192.168.1.7')]),
+      );
+
+      await c.scan(manual: false);
+
+      expect(await storedLan(), '192.168.1.7');
+    });
+
+    test('outlives choosing the emulator alias', () async {
+      final committed = <String>[];
+      final fake = FakeScanner(
+        preferred: server('10.0.2.2'),
+        found: [server('192.168.0.101')],
+      );
+      final c = await buildController(scanner: fake, committed: committed);
+
+      await c.scan();
+      expect(committed, ['http://10.0.2.2:5001/api/v1/']);
+      await Future<void>.delayed(Duration.zero);
+
+      final reopened = await buildController(scanner: fake);
+      await reopened.scan(manual: false);
+
+      expect(reopened.baseOrigin, 'http://10.0.2.2:5001');
+      expect(fake.knownHosts?.first, '192.168.0.101');
+    });
+
+    test('is a LAN address the developer commits once it answers, never the '
+        'alias or a name', () async {
+      final c = await buildController(
+        scanner: FakeScanner(
+          verifyResults: {
+            'http://192.168.0.101:5001': server('192.168.0.101'),
+            'http://10.0.2.2:5001': server('10.0.2.2'),
+            'http://box.tailnet.example:5001': server('box.tailnet.example'),
+          },
+        ),
+      );
+      c.setScheme('http');
+
+      c.urlController.text = '192.168.0.101:5001';
+      await c.commit();
+      expect(await storedLan(), isNull);
+      await c.checkHealth();
+      expect(await storedLan(), '192.168.0.101');
+
+      for (final other in ['10.0.2.2:5001', 'box.tailnet.example:5001']) {
+        c.urlController.text = other;
+        await c.commit();
+        await c.checkHealth();
+      }
+      expect(await storedLan(), '192.168.0.101');
+    });
+
+    test('is a saved LAN server the developer picks once it answers', () async {
+      SharedPreferences.setMockInitialValues({
+        'devCustomServers': ['http://192.168.5.20:5001'],
+      });
+      final c = await buildController(
+        scanner: FakeScanner(
+          verifyResults: {'http://192.168.5.20:5001': server('192.168.5.20')},
+        ),
+      );
+
+      await c.select(entryFor(c, '192.168.5.20:5001'));
+      expect(await storedLan(), isNull);
+      await c.checkHealth();
+
+      expect(await storedLan(), '192.168.5.20');
+    });
+
+    test('is never replaced by an address that has not answered', () async {
+      SharedPreferences.setMockInitialValues({
+        'devLanHost': '192.168.4.100',
+        'devCustomServers': ['http://10.1.1.57:5001'],
+      });
+      final c = await buildController();
+
+      await c.addCustom('http://192.168.40.100:5001');
+      await c.select(entryFor(c, '10.1.1.57:5001'));
+      c.urlController.text = '172.16.9.9:5001';
+      await c.commit();
+
+      expect(await storedLan(), '192.168.4.100');
+    });
+
+    test('is a typed LAN address once it answers the health check', () async {
+      final c = await buildController(
+        scanner: FakeScanner(
+          verifyResults: {'http://192.168.0.101:5001': server('192.168.0.101')},
+        ),
+      );
+      c.setScheme('http');
+
+      c.urlController.text = '192.168.0.120:5001';
+      c.onUrlEdited();
+      await c.checkHealth();
+      expect(await storedLan(), isNull);
+
+      c.urlController.text = '192.168.0.101:5001';
+      c.onUrlEdited();
+      await c.checkHealth();
+      expect(await storedLan(), '192.168.0.101');
+    });
+
+    test('goes before every other host the developer has used', () async {
+      SharedPreferences.setMockInitialValues({
+        'devLanHost': '192.168.0.101',
+        'devServerPins': '{"192.168.0.":"192.168.0.140"}',
+        'devServerLabels': '{"192.168.0.101":"laptop"}',
+      });
+      final fake = FakeScanner();
+      final c = await buildController(scanner: fake);
+
+      await c.scan(manual: false);
+
+      expect(fake.knownHosts, ['192.168.0.101', '192.168.0.140']);
     });
   });
 

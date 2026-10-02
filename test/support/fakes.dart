@@ -1,44 +1,58 @@
 import 'package:flutter_dev_setup/flutter_dev_setup.dart';
 
-/// Scripted network: emits [found] after [scanDelay], answers [verifyOrigin]
-/// from [verifyResults] after [verifyDelay], and throws [error] from [scan]
-/// when one is given.
+/// Scripted network: after [scanDelay], reports [preferred] as found and
+/// preferred and waits [preferredDelay], then emits [found]. Answers
+/// [verifyOrigin] from [verifyResults] after [verifyDelay], throws [error]
+/// from [scan] when one is given, and records the [knownHosts] it was given.
 class FakeScanner implements DevServerScanner {
   FakeScanner({
     this.found = const [],
+    this.preferred,
     this.outcome = ScanOutcome.found,
     this.label = '192.168.0.0/24',
     this.fallback,
     this.verifyResults = const {},
     this.scanDelay = Duration.zero,
+    this.preferredDelay = Duration.zero,
     this.verifyDelay = Duration.zero,
     this.error,
   });
 
   final List<DevServer> found;
+  final DevServer? preferred;
   final ScanOutcome outcome;
   final String label;
   final DevServer? fallback;
   final Map<String, DevServer> verifyResults;
   final Duration scanDelay;
+  final Duration preferredDelay;
   final Duration verifyDelay;
   final Object? error;
   bool cancelled = false;
   int scanCalls = 0;
   int verifyCalls = 0;
+  List<String>? knownHosts;
 
   @override
   Future<ScanSummary> scan({
     String? currentHost,
     String? rememberedHost,
     int? rememberedOctet,
+    Iterable<String> knownHosts = const [],
     required void Function(DevServer server) onFound,
+    void Function(DevServer server)? onPreferred,
     void Function(String subnetBase)? onSubnet,
     void Function(int probed, int total, String label)? onProgress,
   }) async {
     scanCalls++;
+    this.knownHosts = knownHosts.toList();
     await Future<void>.delayed(scanDelay);
     if (error case final error?) throw error;
+    if (preferred case final preferred?) {
+      onFound(preferred);
+      onPreferred?.call(preferred);
+      await Future<void>.delayed(preferredDelay);
+    }
     for (final server in found) {
       onFound(server);
     }

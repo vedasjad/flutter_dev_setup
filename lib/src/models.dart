@@ -151,7 +151,8 @@ class ScanSummary {
   final ScanOutcome outcome;
   final String? subnetBase;
 
-  /// What was searched, e.g. `192.168.0.0/24`.
+  /// What was searched, e.g. `192.168.0.0/24`, or on an emulator
+  /// `emulator host and 192.168.0.0/24`.
   final String? label;
 
   /// An address worth offering even though nothing answered — the emulator's

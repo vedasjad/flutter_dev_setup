@@ -389,73 +389,84 @@ class _StatusHero extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return AnimatedContainer(
-      duration: const Duration(milliseconds: 260),
-      curve: Curves.easeOut,
-      padding: const EdgeInsets.all(14),
-      decoration: ShapeDecoration(
-        color: _accent.withValues(alpha: 0.07),
-        shape: devShape(
-          44,
-          side: BorderSide(color: _accent.withValues(alpha: 0.28)),
-        ),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              _PulseDot(
-                color: checking ? theme.warning : _accent,
-                animate: checking,
+    final shape = devShape(
+      36,
+      side: BorderSide(color: _accent.withValues(alpha: 0.28)),
+    );
+    return Tooltip(
+      message: strings.copyUrl,
+      child: Semantics(
+        button: true,
+        child: Material(
+          type: MaterialType.transparency,
+          child: InkWell(
+            onTap: onCopy,
+            customBorder: shape,
+            child: AnimatedContainer(
+              duration: const Duration(milliseconds: 260),
+              curve: Curves.easeOut,
+              padding: const EdgeInsets.fromLTRB(14, 12, 14, 12),
+              decoration: ShapeDecoration(
+                color: _accent.withValues(alpha: 0.07),
+                shape: shape,
               ),
-              const SizedBox(width: 8),
-              Expanded(
-                child: Text(
-                  _headline,
-                  style: TextStyle(
-                    fontSize: 15,
-                    fontWeight: FontWeight.w700,
-                    color: _legible(
-                      _accent,
-                      Color.alphaBlend(
-                        _accent.withValues(alpha: 0.07),
-                        theme.background,
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      _PulseDot(
+                        color: checking ? theme.warning : _accent,
+                        animate: checking,
                       ),
-                      theme.textPrimary,
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: Text(
+                          _headline,
+                          style: TextStyle(
+                            fontSize: 15,
+                            fontWeight: FontWeight.w700,
+                            color: _legible(
+                              _accent,
+                              Color.alphaBlend(
+                                _accent.withValues(alpha: 0.07),
+                                theme.background,
+                              ),
+                              theme.textPrimary,
+                            ),
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      Icon(
+                        Icons.copy_rounded,
+                        size: 16,
+                        color: theme.textTertiary,
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 6),
+                  Text(
+                    url,
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      fontSize: 14,
+                      fontWeight: FontWeight.w600,
+                      height: 1.3,
+                      color: theme.textPrimary,
                     ),
                   ),
-                ),
+                  const SizedBox(height: 2),
+                  Text(
+                    _caption,
+                    style: TextStyle(fontSize: 12, color: theme.textSecondary),
+                  ),
+                ],
               ),
-              IconButton(
-                onPressed: onCopy,
-                tooltip: strings.copyUrl,
-                icon: Icon(
-                  Icons.copy_rounded,
-                  size: 16,
-                  color: theme.textTertiary,
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 10),
-          Text(
-            url,
-            maxLines: 2,
-            overflow: TextOverflow.ellipsis,
-            style: TextStyle(
-              fontSize: 15,
-              fontWeight: FontWeight.w600,
-              height: 1.3,
-              color: theme.textPrimary,
             ),
           ),
-          const SizedBox(height: 6),
-          Text(
-            _caption,
-            style: TextStyle(fontSize: 12, color: theme.textSecondary),
-          ),
-        ],
+        ),
       ),
     );
   }

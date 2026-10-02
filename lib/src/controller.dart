@@ -101,6 +101,7 @@ class DevSetupController extends ChangeNotifier {
   Map<String, String> _labels = {};
   Map<String, String> _pins = {};
   String? _remembered;
+  String? _lanHost;
 
   // Ranking inputs as they stood when the scan began, so a result that lands
   // mid-scan cannot reshuffle what is already on screen.
@@ -136,6 +137,14 @@ class DevSetupController extends ChangeNotifier {
       ?DevServer.parse(origin, config: config)?.endpoint,
   };
 
+  List<String> get _knownHosts => {
+    ?_lanHost,
+    ..._pins.values,
+    for (final origin in _customs)
+      ?DevServer.parse(origin, config: config)?.host,
+    ..._labels.keys,
+  }.toList();
+
   List<DevServerEntry> get servers => [
     for (final endpoint in _order)
       if (_servers[endpoint] case final server?) _entryFor(server),
@@ -144,9 +153,12 @@ class DevSetupController extends ChangeNotifier {
   DevServerEntry _entryFor(DevServer server) => DevServerEntry(
     server: server,
     label: _labels[server.host],
-    pinned: _pins[pinKeyFor(server.host)] == server.host,
+    pinned: _isPinned(server),
     custom: _customEndpoints.contains(server.endpoint),
   );
+
+  bool _isPinned(DevServer server) =>
+      _pins[pinKeyFor(server.host)] == server.host;
 
   bool isSelected(DevServerEntry entry) =>
       DevServer.fromUrl(baseOrigin)?.origin == entry.server.origin;
@@ -158,6 +170,7 @@ class DevSetupController extends ChangeNotifier {
     final labels = await store.labels();
     final pins = await store.pins();
     final remembered = await store.rememberedHost();
+    final lanHost = await store.lanHost();
     if (_disposed) return;
     suffixController.text = suffix;
     _setOrigin(stripSuffix(saved, suffix.trim()));
@@ -165,6 +178,7 @@ class DevSetupController extends ChangeNotifier {
     _labels = labels;
     _pins = pins;
     _remembered = remembered;
+    _lanHost = lanHost;
     _resetList();
     _detectUrlMode();
     _notify();
@@ -181,7 +195,9 @@ class DevSetupController extends ChangeNotifier {
 
   /// Starts a scan, replacing any that is running. [manual] scans come from
   /// the developer asking to find a server, so they may select one;
-  /// automatic ones only ever list.
+  /// automatic ones only ever list. With nothing pinned, the scanner's
+  /// preferred server is selected the moment it answers rather than when the
+  /// sweep ends.
   Future<void> scan({bool manual = true}) async {
     if (!enableDiscovery || _disposed) return;
     cancelScan();
@@ -204,15 +220,26 @@ class DevSetupController extends ChangeNotifier {
     unawaited(_verifyCustoms(generation, scanner));
 
     final ScanSummary summary;
+    DevServer? preferred;
     try {
       summary = await scanner.scan(
         currentHost: hostOf(baseOrigin),
         rememberedHost: _remembered,
         rememberedOctet: rememberedOctet,
+        knownHosts: _knownHosts,
         onFound: (server) {
           if (generation != _generation) return;
+          _noteLan(server.host);
           _upsertFound(server);
           _notify();
+        },
+        onPreferred: (server) {
+          if (generation != _generation) return;
+          if (!manual || choices != _choices) return;
+          preferred = server;
+          if (_pins.isEmpty || _isPinned(server)) {
+            unawaited(_apply(_servers[server.endpoint] ?? server));
+          }
         },
         onProgress: (probed, total, label) {
           if (generation != _generation) return;
@@ -245,7 +272,7 @@ class DevSetupController extends ChangeNotifier {
     switch (summary.outcome) {
       case ScanOutcome.found:
         _scanPhase = ScanPhase.found;
-        if (autoSelect) await _selectAfterManualScan();
+        if (autoSelect) await _selectAfterManualScan(preferred);
       case ScanOutcome.notFound:
         final fallback = summary.fallback;
         if (fallback != null) {
@@ -287,13 +314,16 @@ class DevSetupController extends ChangeNotifier {
   /// Re-checks saved servers without sweeping the network.
   Future<void> refreshSaved() => _verifyCustoms(_generation, _newScanner());
 
-  Future<void> _selectAfterManualScan() async {
+  Future<void> _selectAfterManualScan(DevServer? preferred) async {
     final found = [
       for (final endpoint in _order)
         if (_foundThisScan.contains(endpoint)) _servers[endpoint]!,
     ];
-    final pinned = found.where((s) => _pins[pinKeyFor(s.host)] == s.host);
+    final pinned = found.where(_isPinned);
     if (pinned.isNotEmpty) return _apply(pinned.first);
+    if (preferred != null) {
+      return _apply(_servers[preferred.endpoint] ?? preferred);
+    }
     if (found.length == 1) return _apply(found.single);
   }
 
@@ -550,9 +580,27 @@ class DevSetupController extends ChangeNotifier {
     final server = await _newScanner().verifyOrigin(origin);
     if (baseOrigin != origin || _disposed) return;
     _pingStatus = server == null ? PingStatus.offline : PingStatus.online;
+    if (server != null) _noteLan(server.host);
     _wasOnline = _pingStatus == PingStatus.online;
     _settledStatus = _pingStatus;
     _notify();
+  }
+
+  /// Keeps the network of a LAN server the developer used or a scan found,
+  /// for an emulator scan to sweep. Only a server on another /24 replaces it,
+  /// so it holds still while scans keep finding the same network.
+  void _noteLan(String? host) {
+    if (host == null) return;
+    final subnets = DevServerDiscovery.emulatorSubnets(hints: [host]);
+    if (subnets.isEmpty) return;
+    final (:subnetBase, :centre) = subnets.single;
+    final current = _lanHost;
+    if (current != null &&
+        DevServerDiscovery.subnetBaseOf(current) == subnetBase) {
+      return;
+    }
+    _lanHost = '$subnetBase$centre';
+    unawaited(store.setLanHost(_lanHost!));
   }
 
   void _resetHealth() {
