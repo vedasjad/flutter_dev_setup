@@ -2,6 +2,15 @@
 
 A developer setup screen for Flutter apps. It finds dev servers on the local network, lets a developer switch the API base URL at runtime, and keeps that choice across launches.
 
+<p>
+  <img src="https://raw.githubusercontent.com/vedasjad/flutter_dev_setup/main/screenshots/connected.webp" width="200" alt="Connected to a named, pinned server found on the local network">
+  <img src="https://raw.githubusercontent.com/vedasjad/flutter_dev_setup/main/screenshots/scanning.webp" width="200" alt="Scanning the local network">
+  <img src="https://raw.githubusercontent.com/vedasjad/flutter_dev_setup/main/screenshots/rename_server.webp" width="200" alt="Naming a server">
+  <img src="https://raw.githubusercontent.com/vedasjad/flutter_dev_setup/main/screenshots/add_server.webp" width="200" alt="Adding a server by address">
+</p>
+
+The screen picks up your app's theme fonts; these shots use Poppins.
+
 ## The problem
 
 An emulator reaches the dev server on your laptop through a fixed alias: `10.0.2.2` on Android, `127.0.0.1` on the iOS simulator. A physical phone has no such alias. The server runs on the laptop, so the phone's own IP is never the right address. The laptop's address also changes with every network and DHCP lease, so a hard-coded IP means a rebuild every time it moves.

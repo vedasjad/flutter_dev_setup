@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.2.3
+
+- Screenshots on pub.dev and in the README. No code changes.
+
 ## 0.2.2
 
 - The health check no longer follows redirects. A host could answer with a redirect to a healthy server, be listed as a dev server itself, and make the device request any URL it chose.

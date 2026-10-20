@@ -3,7 +3,7 @@ description: >-
   A developer setup screen for Flutter apps: find dev servers on the local
   network, switch the API base URL at runtime, and keep the choice across
   launches.
-version: 0.2.2
+version: 0.2.3
 repository: https://github.com/vedasjad/flutter_dev_setup
 issue_tracker: https://github.com/vedasjad/flutter_dev_setup/issues
 
@@ -11,6 +11,16 @@ topics:
   - developer-tools
   - networking
   - debugging
+
+screenshots:
+  - description: Connected to a dev server found on the local network, named and pinned.
+    path: screenshots/connected.webp
+  - description: Scanning the local network for dev servers.
+    path: screenshots/scanning.webp
+  - description: Naming a server so the list shows a label instead of its address.
+    path: screenshots/rename_server.webp
+  - description: Adding a server the scan can't reach, such as a VPN or tunnel address.
+    path: screenshots/add_server.webp
 
 environment:
   sdk: ^3.8.0
