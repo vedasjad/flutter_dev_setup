@@ -1,9 +1,8 @@
 name: flutter_dev_setup
 description: >-
   A developer setup screen for Flutter apps: find dev servers on the local
-  network, switch the API base URL at runtime, and keep the choice across
-  launches.
-version: 0.2.3
+  network, switch the API base URL at runtime, and mock the device location.
+version: 0.3.0
 repository: https://github.com/vedasjad/flutter_dev_setup
 issue_tracker: https://github.com/vedasjad/flutter_dev_setup/issues
 
@@ -11,6 +10,8 @@ topics:
   - developer-tools
   - networking
   - debugging
+  - location
+  - testing
 
 screenshots:
   - description: Connected to a dev server found on the local network, named and pinned.
@@ -21,6 +22,12 @@ screenshots:
     path: screenshots/rename_server.webp
   - description: Adding a server the scan can't reach, such as a VPN or tunnel address.
     path: screenshots/add_server.webp
+  - description: Mocking the location along a road route built from a shared Google Maps link.
+    path: screenshots/mock_route.webp
+  - description: Searching places near a mocked point, with free OpenStreetMap search.
+    path: screenshots/mock_point.webp
+  - description: The setup screen's mock location card, showing a route in progress.
+    path: screenshots/mock_card.webp
 
 environment:
   sdk: ^3.8.0
@@ -36,3 +43,4 @@ dev_dependencies:
   flutter_test:
     sdk: flutter
   flutter_lints: ^6.0.0
+  shared_preferences_platform_interface: ^2.4.1

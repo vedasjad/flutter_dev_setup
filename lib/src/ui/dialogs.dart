@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../controller.dart';
 import '../models.dart';
+import 'location_strings.dart';
 import 'shape.dart';
 import 'strings.dart';
 import 'theme.dart';
@@ -42,6 +43,205 @@ Future<String?> showAddServerDialog(
   builder: (_) =>
       _AddServerDialog(initial: initial, theme: theme, strings: strings),
 );
+
+sealed class PlaceNameResult {
+  const PlaceNameResult();
+}
+
+final class NamePlace extends PlaceNameResult {
+  const NamePlace(this.name);
+  final String name;
+}
+
+final class ForgetPlace extends PlaceNameResult {
+  const ForgetPlace();
+}
+
+/// Names a place, or forgets it when [canForget] offers that.
+Future<PlaceNameResult?> showPlaceNameDialog(
+  BuildContext context, {
+  required String initial,
+  required String subtitle,
+  required bool canForget,
+  required DevSetupTheme theme,
+  required MockLocationStrings strings,
+}) => showDialog<PlaceNameResult>(
+  context: context,
+  builder: (_) => _ValueDialog<PlaceNameResult>(
+    theme: theme,
+    title: strings.placeNameTitle,
+    subtitle: subtitle,
+    initial: initial,
+    hint: strings.placeNameHint,
+    help: strings.placeNameHelp,
+    invalid: strings.placeNameHelp,
+    save: strings.save,
+    cancel: strings.cancel,
+    capitalization: TextCapitalization.words,
+    parse: (text) => text.trim().isEmpty ? null : NamePlace(text.trim()),
+    leading: canForget
+        ? (context) => _DialogAction(
+            label: strings.forget,
+            color: theme.error,
+            onPressed: () => Navigator.of(context).pop(const ForgetPlace()),
+          )
+        : null,
+  ),
+);
+
+/// Returns the pasted text once [accepts] takes it.
+Future<String?> showPasteRouteDialog(
+  BuildContext context, {
+  required bool Function(String text) accepts,
+  required DevSetupTheme theme,
+  required MockLocationStrings strings,
+}) => showDialog<String>(
+  context: context,
+  builder: (_) => _ValueDialog<String>(
+    theme: theme,
+    title: strings.pasteRoute,
+    subtitle: strings.pasteRouteBody,
+    initial: '',
+    hint: strings.pasteRouteHint,
+    help: strings.pasteRouteHelp,
+    invalid: strings.pasteRouteInvalid,
+    save: strings.save,
+    cancel: strings.cancel,
+    maxLines: 6,
+    parse: (text) => accepts(text) ? text : null,
+  ),
+);
+
+/// A speed in km/h above zero.
+Future<double?> showSpeedDialog(
+  BuildContext context, {
+  required String initial,
+  required DevSetupTheme theme,
+  required MockLocationStrings strings,
+}) => showDialog<double>(
+  context: context,
+  builder: (_) => _ValueDialog<double>(
+    theme: theme,
+    title: strings.speedTitle,
+    subtitle: strings.speedBody,
+    initial: initial,
+    hint: strings.speedHint,
+    help: strings.speedHelp,
+    invalid: strings.speedInvalid,
+    save: strings.save,
+    cancel: strings.cancel,
+    keyboardType: const TextInputType.numberWithOptions(decimal: true),
+    parse: (text) {
+      final kmh = double.tryParse(text.trim().replaceAll(',', '.'));
+      return kmh != null && kmh.isFinite && kmh > 0 && kmh <= 1000 ? kmh : null;
+    },
+  ),
+);
+
+class _ValueDialog<T> extends StatefulWidget {
+  const _ValueDialog({
+    required this.theme,
+    required this.title,
+    required this.subtitle,
+    required this.initial,
+    required this.hint,
+    required this.help,
+    required this.invalid,
+    required this.save,
+    required this.cancel,
+    required this.parse,
+    this.keyboardType,
+    this.capitalization = TextCapitalization.none,
+    this.maxLines = 1,
+    this.leading,
+  });
+
+  final DevSetupTheme theme;
+  final String title;
+  final String subtitle;
+  final String initial;
+  final String hint;
+  final String help;
+  final String invalid;
+  final String save;
+  final String cancel;
+
+  /// Null when the text cannot be saved.
+  final T? Function(String text) parse;
+  final TextInputType? keyboardType;
+  final TextCapitalization capitalization;
+  final int maxLines;
+  final Widget Function(BuildContext context)? leading;
+
+  @override
+  State<_ValueDialog<T>> createState() => _ValueDialogState<T>();
+}
+
+class _ValueDialogState<T> extends State<_ValueDialog<T>> {
+  late final TextEditingController _controller =
+      TextEditingController(text: widget.initial)
+        ..selection = TextSelection(
+          baseOffset: 0,
+          extentOffset: widget.initial.length,
+        );
+  final ValueNotifier<bool> _invalid = ValueNotifier(false);
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    _invalid.dispose();
+    super.dispose();
+  }
+
+  void _save() {
+    final value = widget.parse(_controller.text);
+    if (value == null) {
+      _invalid.value = true;
+      return;
+    }
+    Navigator.of(context).pop(value);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = widget.theme;
+    return ValueListenableBuilder<bool>(
+      valueListenable: _invalid,
+      builder: (context, invalid, _) => _DialogShell(
+        theme: theme,
+        title: widget.title,
+        subtitle: widget.subtitle,
+        field: _DialogField(
+          controller: _controller,
+          theme: theme,
+          hint: widget.hint,
+          keyboardType: widget.keyboardType,
+          capitalization: widget.capitalization,
+          maxLines: widget.maxLines,
+          borderColor: invalid ? theme.error : null,
+          onChanged: () => _invalid.value = false,
+          onSubmitted: _save,
+        ),
+        help: Text(
+          invalid ? widget.invalid : widget.help,
+          style: TextStyle(
+            fontSize: 11,
+            color: invalid ? theme.error : theme.textTertiary,
+          ),
+        ),
+        leading: widget.leading?.call(context),
+        actions: [
+          _DialogAction(
+            label: widget.cancel,
+            color: theme.textSecondary,
+            onPressed: () => Navigator.of(context).pop(),
+          ),
+          _PrimaryAction(label: widget.save, theme: theme, onPressed: _save),
+        ],
+      ),
+    );
+  }
+}
 
 class _ServerNameDialog extends StatefulWidget {
   const _ServerNameDialog({
@@ -282,6 +482,7 @@ class _DialogField extends StatelessWidget {
     this.keyboardType,
     this.borderColor,
     this.onChanged,
+    this.maxLines = 1,
   });
 
   final TextEditingController controller;
@@ -292,6 +493,7 @@ class _DialogField extends StatelessWidget {
   final TextInputType? keyboardType;
   final Color? borderColor;
   final VoidCallback? onChanged;
+  final int maxLines;
 
   @override
   Widget build(BuildContext context) {
@@ -309,8 +511,12 @@ class _DialogField extends StatelessWidget {
         autofocus: true,
         autocorrect: false,
         textCapitalization: capitalization,
-        keyboardType: keyboardType,
-        textInputAction: TextInputAction.done,
+        keyboardType: maxLines > 1 ? TextInputType.multiline : keyboardType,
+        maxLines: maxLines,
+        minLines: 1,
+        textInputAction: maxLines > 1
+            ? TextInputAction.newline
+            : TextInputAction.done,
         cursorColor: theme.primary,
         style: theme.resolvedFieldTextStyle,
         decoration: InputDecoration(

@@ -1,6 +1,6 @@
 # flutter_dev_setup
 
-A developer setup screen for Flutter apps. It finds dev servers on the local network, lets a developer switch the API base URL at runtime, and keeps that choice across launches.
+A developer setup screen for Flutter apps. It finds dev servers on the local network, lets a developer switch the API base URL at runtime, and keeps that choice across launches. It can also [mock the device's location](#mock-location), with a fixed point or a route played back at a set speed.
 
 <p>
   <img src="https://raw.githubusercontent.com/vedasjad/flutter_dev_setup/main/screenshots/connected.webp" width="200" alt="Connected to a named, pinned server found on the local network">
@@ -269,6 +269,135 @@ The scan only covers the /24 the phone is on. It can't find a laptop on a VPN or
 - They are re-checked on every scan, and a check that finishes after the sweep still updates the list. Until a saved address answers, it is marked "saved".
 
 Each /24 in a private range (10/8, 172.16/12 or 192.168/16) can have one pinned server, so home and office keep separate pins. Every other address, such as a hostname or a Tailscale IP, shares a single pin that applies on every network.
+
+## Mock location
+
+The same screen can choose what your app sees as the device's location: the real one, a fixed point, or a route played back at a set speed. It works on emulators and physical phones, Android and iOS, with no setting changed on the device.
+
+<p>
+  <img src="https://raw.githubusercontent.com/vedasjad/flutter_dev_setup/main/screenshots/mock_card.webp" width="200" alt="The mock location card on the setup screen, showing a route in progress">
+  <img src="https://raw.githubusercontent.com/vedasjad/flutter_dev_setup/main/screenshots/mock_route.webp" width="200" alt="A road route from Kanpur to Banda playing at 40 km/h">
+  <img src="https://raw.githubusercontent.com/vedasjad/flutter_dev_setup/main/screenshots/mock_point.webp" width="200" alt="Searching for hospitals near a mocked point in Banda">
+</p>
+
+The package can't change what a location plugin reports, so the mock lives in your app: route your location reads through `MockLocation`, and they return the mock while one is set. Everything else on the phone keeps the real location.
+
+### 1. Read the position through `MockLocation`
+
+With `geolocator`, from the [example app](example/lib/main.dart):
+
+```dart
+abstract final class AppLocation {
+  static Future<Position> current() async {
+    if (kDebugMode) {
+      final mock = await MockLocation.current();
+      if (mock != null) return _toPosition(mock);
+    }
+    return Geolocator.getCurrentPosition();
+  }
+
+  static Stream<Position> positions() {
+    final real = Geolocator.getPositionStream();
+    return kDebugMode ? MockLocation.overlay(real, _toPosition) : real;
+  }
+
+  static Position _toPosition(MockPosition mock) => Position(
+    latitude: mock.latitude,
+    longitude: mock.longitude,
+    timestamp: mock.timestamp,
+    accuracy: mock.accuracy,
+    altitude: mock.altitude,
+    altitudeAccuracy: 0,
+    heading: mock.heading,
+    headingAccuracy: 0,
+    speed: mock.speed,
+    speedAccuracy: 0,
+    isMocked: true,
+  );
+}
+```
+
+- `MockLocation.current()` is the mocked position now, or null when mocking is off. It never throws.
+- `MockLocation.overlay(real, convert)` passes `real` through while mocking is off. While it is on, it sends the mock every second instead, or only when it changes for a fixed point or a paused route. It switches as soon as the setting changes.
+- The setting is read with no cache, so a background isolate, such as a foreground service that uploads a driver's position, sees a change straight away. Import `package:flutter_dev_setup/mock_location.dart` there, which leaves out the screens.
+- A route's position is worked out from the clock, so every isolate agrees on it, and it carries on from the same spot after the app restarts.
+- Guard the calls with the same build check as the screen, so release builds leave the package out.
+- `isMocked` is yours to set. If your app refuses mocked positions, turn that check off in development builds, or report `false`.
+- Anything that reads the OS location itself won't move: a native map's my-location dot (`myLocationEnabled` in `google_maps_flutter`), geofences, and other apps.
+
+### 2. Show the location screen
+
+Pass a `MockLocationConfig` to the setup screen, and it shows a card that opens the location screen:
+
+```dart
+DevSetupScreen(
+  // ...
+  mockLocation: const MockLocationConfig(
+    places: [MockPlace('Office', MockPoint(25.4762689, 80.3395498))],
+  ),
+)
+```
+
+`places` are your app's own presets, listed ahead of the ones the developer saves. To put the location screen somewhere else, such as a debug menu, use `MockLocationScreen`, or `MockLocationCard` with a shared `MockLocationController`. Pass the same `MockLocationStore` (its `keyPrefix`) to the screen's config and to every `MockLocation` call.
+
+### Finding a place
+
+The search field takes:
+
+- Coordinates as Google Maps copies them (`25.4775, 80.3349`), with N/S/E/W, or in degrees, minutes and seconds.
+- A Google Maps link, including a shared `maps.app.goo.gl` link, which is followed on the device. A place link gives the pin. A directions link gives its stops, switches to route mode and builds the route.
+- Anything else is searched. The default, `defaultPlaceSearch`, needs no key: it asks [Photon](https://photon.komoot.io) within about 50 km of where you are working, and [Nominatim](https://nominatim.org) everywhere, and lists nearby results first. Both are free OpenStreetMap services that ask for light use, so the screen searches only when the developer submits.
+
+OpenStreetMap misses some places, such as many neighbourhoods in smaller Indian towns. For those, long-press the spot in Google Maps to drop a pin, share it, and paste the link: a dropped pin's link carries its coordinates. A place shared from the Google Maps app usually carries only its name, which is then searched around the area its feature id points to. The Open Maps button opens Google Maps (or Apple Maps on iOS) on what was typed, and Paste link brings the copied link back. The package doesn't launch other apps itself, so that it adds no plugin to apps that never use this screen; pass your own opener, for example url_launcher's:
+
+```dart
+MockLocationConfig(
+  openUrl: (uri) => launchUrl(uri, mode: LaunchMode.externalApplication),
+)
+```
+
+Without `openUrl` the Open Maps button is hidden. Paste link works either way.
+
+To search your own data, or your backend's place search, pass a function:
+
+```dart
+MockLocationConfig(
+  placeSearch: CombinedPlaceSearch([
+    PlaceSearch.from((query, near) async {
+      final predictions = await api.autocomplete(query, near);
+      return [
+        for (final p in predictions)
+          PlaceResult(
+            p.name,
+            detail: p.address,
+            locate: () => api.coordinatesOf(p.id),
+          ),
+      ];
+    }),
+    defaultPlaceSearch,
+  ]),
+)
+```
+
+A `PlaceResult` with `locate` and no `point` is looked up only when the developer picks it, which suits an autocomplete API that charges for each lookup of coordinates. `CombinedPlaceSearch` lists the first search's results first, then the rest, nearest first.
+
+With a Google Maps Platform key, `GooglePlaceSearch(apiKey: ...)` uses the Places API (New) and `GoogleRouteFinder(apiKey: ...)` uses the Routes API. Both are billed per request. A key restricted to Android or iOS apps needs `headers` that name the app.
+
+### Routes
+
+Add two or more stops, from the search or the saved places, and build the route. The default, `OsrmRouteFinder`, uses the free [OSRM](https://project-osrm.org) demo server, which routes by car only. If routing fails, the route can follow straight lines between the stops instead. A route can also be pasted: one point per line, a directions link, or an encoded polyline. `RouteFinder.from` takes your own routing as a function.
+
+Playback has a speed, presets plus any value, and what happens at the end: stop, loop, or turn round and come back. Switching to another mode pauses a route that is playing, and coming back to route mode carries on from the same spot.
+
+| `MockLocationConfig` field | Default | Meaning |
+| --- | --- | --- |
+| `store` | `MockLocationStore()` | Where the mock and the saved places are kept. Pass the same one to `MockLocation`. |
+| `places` | none | Your app's places, listed first. They can't be renamed or forgotten. |
+| `placeSearch` | `defaultPlaceSearch` | What the search field asks. Null turns searching off; coordinates and links still work. |
+| `routeFinder` | `OsrmRouteFinder()` | What builds a route through the stops. Null always uses straight lines. |
+| `speedPresets` | 5, 25, 40, 60 | The speeds offered, in km/h. |
+| `openUrl` | none | Opens a maps app for the Open Maps button. Without it, the button is hidden. |
+| `searchCenter` | none | Where searches look first while no point or stop is set, such as the device's last known location. Without it, the first of `places`. |
 
 ## Platform setup
 

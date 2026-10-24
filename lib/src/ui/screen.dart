@@ -1,17 +1,19 @@
 import 'dart:async';
-import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../controller.dart';
 import '../discovery_config.dart';
+import '../location_controller.dart';
 import '../models.dart';
 import '../store.dart';
 import 'dialogs.dart';
+import 'location_screen.dart';
 import 'shape.dart';
 import 'strings.dart';
 import 'theme.dart';
+import 'widgets.dart';
 
 /// Lets a developer pick which server the app talks to: the default, one found
 /// on the local network, or one saved by hand.
@@ -28,6 +30,7 @@ class DevSetupScreen extends StatefulWidget {
     this.store,
     this.enableDiscovery = true,
     this.controller,
+    this.mockLocation,
   });
 
   /// Full URL, suffix included — what Default and Reset return to.
@@ -50,6 +53,11 @@ class DevSetupScreen extends StatefulWidget {
   /// Supply one to drive the screen yourself — the caller then owns `init`.
   final DevSetupController? controller;
 
+  /// Shows a card that opens [MockLocationScreen]. Null leaves it out; the
+  /// app's own location code has to ask [MockLocation] for it to have any
+  /// effect.
+  final MockLocationConfig? mockLocation;
+
   @override
   State<DevSetupScreen> createState() => _DevSetupScreenState();
 }
@@ -58,6 +66,7 @@ class _DevSetupScreenState extends State<DevSetupScreen>
     with WidgetsBindingObserver {
   late DevSetupController _controller;
   late bool _ownsController;
+  MockLocationController? _location;
   bool _proceeding = false;
 
   @override
@@ -65,6 +74,14 @@ class _DevSetupScreenState extends State<DevSetupScreen>
     super.initState();
     WidgetsBinding.instance.addObserver(this);
     _attach();
+    _attachLocation();
+  }
+
+  void _attachLocation() {
+    _location?.dispose();
+    final config = widget.mockLocation;
+    _location = config == null ? null : MockLocationController(config: config);
+    if (_location case final location?) unawaited(location.init());
   }
 
   void _attach() {
@@ -86,6 +103,7 @@ class _DevSetupScreenState extends State<DevSetupScreen>
   @override
   void didUpdateWidget(DevSetupScreen oldWidget) {
     super.didUpdateWidget(oldWidget);
+    if (widget.mockLocation != oldWidget.mockLocation) _attachLocation();
     if (widget.controller == oldWidget.controller) return;
     if (_ownsController) _controller.dispose();
     _attach();
@@ -122,6 +140,7 @@ class _DevSetupScreenState extends State<DevSetupScreen>
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
     if (_ownsController) _controller.dispose();
+    _location?.dispose();
     super.dispose();
   }
 
@@ -199,6 +218,18 @@ class _DevSetupScreenState extends State<DevSetupScreen>
     if (origin != null) await _controller.addCustom(origin);
   }
 
+  Future<void> _openLocation(MockLocationController location) =>
+      Navigator.of(context).push(
+        MaterialPageRoute<void>(
+          builder: (_) => MockLocationScreen(
+            config: location.config,
+            controller: location,
+            theme: _theme,
+            strings: _strings.mockLocation,
+          ),
+        ),
+      );
+
   String? _scanStatus() {
     final c = _controller;
     return switch (c.scanPhase) {
@@ -267,6 +298,15 @@ class _DevSetupScreenState extends State<DevSetupScreen>
                 strings: _strings,
                 onSubmitted: c.canProceed ? _proceed : null,
               ),
+              if (_location case final location?) ...[
+                const SizedBox(height: 12),
+                MockLocationCard(
+                  controller: location,
+                  theme: _theme,
+                  strings: _strings.mockLocation,
+                  onTap: () => _openLocation(location),
+                ),
+              ],
               const SizedBox(height: 14),
               Row(
                 children: [
@@ -415,7 +455,7 @@ class _StatusHero extends StatelessWidget {
                 children: [
                   Row(
                     children: [
-                      _PulseDot(
+                      DevPulseDot(
                         color: checking ? theme.warning : _accent,
                         animate: checking,
                       ),
@@ -426,7 +466,7 @@ class _StatusHero extends StatelessWidget {
                           style: TextStyle(
                             fontSize: 15,
                             fontWeight: FontWeight.w700,
-                            color: _legible(
+                            color: legibleColor(
                               _accent,
                               Color.alphaBlend(
                                 _accent.withValues(alpha: 0.07),
@@ -472,71 +512,6 @@ class _StatusHero extends StatelessWidget {
   }
 }
 
-class _PulseDot extends StatefulWidget {
-  const _PulseDot({required this.color, required this.animate});
-
-  final Color color;
-  final bool animate;
-
-  @override
-  State<_PulseDot> createState() => _PulseDotState();
-}
-
-class _PulseDotState extends State<_PulseDot>
-    with SingleTickerProviderStateMixin {
-  late final AnimationController _pulse = AnimationController(
-    vsync: this,
-    duration: const Duration(milliseconds: 900),
-  );
-
-  @override
-  void initState() {
-    super.initState();
-    if (widget.animate) _pulse.repeat(reverse: true);
-  }
-
-  @override
-  void didUpdateWidget(_PulseDot oldWidget) {
-    super.didUpdateWidget(oldWidget);
-    if (widget.animate == oldWidget.animate) return;
-    if (widget.animate) {
-      _pulse.repeat(reverse: true);
-    } else {
-      _pulse
-        ..stop()
-        ..value = 0;
-    }
-  }
-
-  @override
-  void dispose() {
-    _pulse.dispose();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return AnimatedBuilder(
-      animation: _pulse,
-      builder: (context, _) => Container(
-        width: 10,
-        height: 10,
-        decoration: BoxDecoration(
-          shape: BoxShape.circle,
-          color: widget.color,
-          boxShadow: [
-            BoxShadow(
-              color: widget.color.withValues(alpha: 0.45 * _pulse.value),
-              blurRadius: 8,
-              spreadRadius: 3 * _pulse.value,
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
 class _SourceSwitch extends StatelessWidget {
   const _SourceSwitch({
     required this.urlMode,
@@ -561,7 +536,7 @@ class _SourceSwitch extends StatelessWidget {
     final localSelected = urlMode == true;
     final segments = [
       if (showLocal)
-        _Segment(
+        DevSegment(
           icon: Icons.wifi_rounded,
           label: scanning ? strings.cancel : strings.localIp,
           busy: scanning,
@@ -569,7 +544,7 @@ class _SourceSwitch extends StatelessWidget {
           theme: theme,
           onTap: onLocal,
         ),
-      _Segment(
+      DevSegment(
         icon: Icons.restore_rounded,
         label: strings.useDefault,
         active: urlMode == false,
@@ -615,65 +590,6 @@ class _SourceSwitch extends StatelessWidget {
   }
 }
 
-class _Segment extends StatelessWidget {
-  const _Segment({
-    required this.icon,
-    required this.label,
-    required this.active,
-    required this.theme,
-    required this.onTap,
-    this.busy = false,
-  });
-
-  final IconData icon;
-  final String label;
-  final bool active;
-  final bool busy;
-  final DevSetupTheme theme;
-  final VoidCallback onTap;
-
-  @override
-  Widget build(BuildContext context) {
-    final color = active ? theme.onPrimary : theme.textSecondary;
-    return Semantics(
-      button: true,
-      selected: active,
-      child: GestureDetector(
-        onTap: onTap,
-        behavior: HitTestBehavior.opaque,
-        child: Center(
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              if (busy)
-                SizedBox(
-                  width: 14,
-                  height: 14,
-                  child: CircularProgressIndicator(
-                    strokeWidth: 2,
-                    color: color,
-                  ),
-                )
-              else
-                Icon(icon, size: 16, color: color),
-              const SizedBox(width: 6),
-              Text(
-                label,
-                maxLines: 1,
-                style: TextStyle(
-                  fontSize: 13,
-                  fontWeight: FontWeight.w600,
-                  color: color,
-                ),
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-}
-
 class _EndpointCard extends StatelessWidget {
   const _EndpointCard({
     required this.controller,
@@ -698,7 +614,7 @@ class _EndpointCard extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          _FieldLabel(
+          DevFieldLabel(
             icon: Icons.dns_outlined,
             text: strings.baseUrl,
             theme: theme,
@@ -713,7 +629,7 @@ class _EndpointCard extends StatelessWidget {
               ),
               const SizedBox(width: 8),
               Expanded(
-                child: _Field(
+                child: DevField(
                   controller: controller.urlController,
                   hint: strings.baseUrlHint,
                   theme: theme,
@@ -725,13 +641,13 @@ class _EndpointCard extends StatelessWidget {
             ],
           ),
           const SizedBox(height: 12),
-          _FieldLabel(
+          DevFieldLabel(
             icon: Icons.alt_route_rounded,
             text: strings.apiSuffix,
             theme: theme,
           ),
           const SizedBox(height: 8),
-          _Field(
+          DevField(
             controller: controller.suffixController,
             hint: strings.suffixHint,
             theme: theme,
@@ -742,87 +658,6 @@ class _EndpointCard extends StatelessWidget {
     );
   }
 }
-
-class _FieldLabel extends StatelessWidget {
-  const _FieldLabel({
-    required this.icon,
-    required this.text,
-    required this.theme,
-  });
-
-  final IconData icon;
-  final String text;
-  final DevSetupTheme theme;
-
-  @override
-  Widget build(BuildContext context) {
-    return Row(
-      children: [
-        Icon(icon, size: 15, color: theme.textTertiary),
-        const SizedBox(width: 6),
-        Text(
-          text.toUpperCase(),
-          style: TextStyle(
-            fontSize: 11,
-            fontWeight: FontWeight.w700,
-            letterSpacing: 0.5,
-            color: theme.textTertiary,
-          ),
-        ),
-      ],
-    );
-  }
-}
-
-class _Field extends StatelessWidget {
-  const _Field({
-    required this.controller,
-    required this.hint,
-    required this.theme,
-    required this.onChanged,
-    this.onSubmitted,
-    this.keyboardType,
-  });
-
-  final TextEditingController controller;
-  final String hint;
-  final DevSetupTheme theme;
-  final VoidCallback onChanged;
-  final VoidCallback? onSubmitted;
-  final TextInputType? keyboardType;
-
-  @override
-  Widget build(BuildContext context) {
-    final style = _fieldStyle(context, theme);
-    return Container(
-      decoration: ShapeDecoration(
-        color: theme.surfaceMuted,
-        shape: devShape(20, side: BorderSide(color: theme.fieldBorder)),
-      ),
-      padding: const EdgeInsets.symmetric(horizontal: 14),
-      child: TextField(
-        controller: controller,
-        autocorrect: false,
-        keyboardType: keyboardType,
-        cursorColor: theme.primary,
-        style: style,
-        decoration: InputDecoration(
-          hintText: hint,
-          hintStyle: style.copyWith(color: theme.textTertiary),
-          border: InputBorder.none,
-          contentPadding: const EdgeInsets.symmetric(vertical: 14),
-        ),
-        onChanged: (_) => onChanged(),
-        onSubmitted: (_) => onSubmitted?.call(),
-      ),
-    );
-  }
-}
-
-TextStyle _fieldStyle(BuildContext context, DevSetupTheme theme) =>
-    (Theme.of(context).textTheme.bodyLarge ?? const TextStyle()).merge(
-      theme.resolvedFieldTextStyle,
-    );
 
 class _SchemePicker extends StatelessWidget {
   const _SchemePicker({
@@ -837,7 +672,7 @@ class _SchemePicker extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final style = _fieldStyle(context, theme);
+    final style = devFieldStyle(context, theme);
     return Container(
       // A 48dp tap target inside the 1px border.
       height: kMinInteractiveDimension + 2,
@@ -972,14 +807,14 @@ class _ServerTile extends StatelessWidget {
                               const SizedBox(width: 8),
                             ],
                             if (server.reachable)
-                              _Chip(
+                              DevChip(
                                 text: strings.latency(server.latencyMs),
                                 color: _latencyTone(server.latencyMs),
                                 background: background,
                                 ink: theme.textPrimary,
                               )
                             else
-                              _Chip(
+                              DevChip(
                                 text: strings.saved,
                                 color: theme.idle,
                                 background: background,
@@ -1065,55 +900,6 @@ class _ServerAvatar extends StatelessWidget {
       child: child,
     );
   }
-}
-
-class _Chip extends StatelessWidget {
-  const _Chip({
-    required this.text,
-    required this.color,
-    required this.background,
-    required this.ink,
-  });
-
-  final String text;
-  final Color color;
-
-  /// What the chip sits on, for working out a readable text colour.
-  final Color background;
-  final Color ink;
-
-  @override
-  Widget build(BuildContext context) {
-    final tint = color.withValues(alpha: 0.12);
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
-      decoration: ShapeDecoration(color: tint, shape: devShape(8)),
-      child: Text(
-        text,
-        style: TextStyle(
-          fontSize: 10,
-          fontWeight: FontWeight.w700,
-          color: _legible(color, Color.alphaBlend(tint, background), ink),
-        ),
-      ),
-    );
-  }
-}
-
-/// [tone] pulled toward [ink] just far enough for small text to reach WCAG
-/// AA (4.5:1) on [background]; a status colour such as amber fails it alone.
-Color _legible(Color tone, Color background, Color ink) {
-  for (var step = 0; step < 10; step++) {
-    final color = Color.lerp(tone, ink, step / 10)!;
-    if (_contrast(color, background) >= 4.5) return color;
-  }
-  return ink;
-}
-
-double _contrast(Color a, Color b) {
-  final x = a.computeLuminance();
-  final y = b.computeLuminance();
-  return (math.max(x, y) + 0.05) / (math.min(x, y) + 0.05);
 }
 
 class _EmptyServers extends StatelessWidget {
