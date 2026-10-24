@@ -1,3 +1,5 @@
+import 'location_strings.dart';
+
 /// Every piece of text the screen shows, overridable for localisation.
 class DevSetupStrings {
   const DevSetupStrings({
@@ -55,6 +57,7 @@ class DevSetupStrings {
     this.addServerInvalid = 'Needs a scheme and a host, e.g. http://host:8080',
     this.invalidUrlTitle = 'Invalid URL',
     this.invalidUrlBody = 'Enter a valid URL before proceeding.',
+    this.mockLocation = const MockLocationStrings(),
   });
 
   final String title;
@@ -107,6 +110,9 @@ class DevSetupStrings {
   final String addServerInvalid;
   final String invalidUrlTitle;
   final String invalidUrlBody;
+
+  /// For the mock location card and the screen it opens.
+  final MockLocationStrings mockLocation;
 
   static String _copied(String url) => 'Copied $url';
   static String _scanning(String label, int probed, int total) =>
