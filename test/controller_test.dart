@@ -218,6 +218,33 @@ void main() {
   });
 
   group('scanning', () {
+    test('scans the ports a developer chose, on this device', () async {
+      final fake = FakeScanner(found: [server('192.168.0.102', port: 8200)]);
+      final c = await buildController(scanner: fake);
+      expect(c.ports, testConfig.ports);
+
+      await c.setPorts([8200, 5001]);
+
+      expect(c.ports, [8200, 5001]);
+      expect(fake.scanCalls, 1);
+      expect(c.baseOrigin, 'http://192.168.0.102:8200');
+      final reopened = await buildController();
+      expect(reopened.ports, [8200, 5001]);
+    });
+
+    test("going back to the app's ports forgets the choice", () async {
+      final c = await buildController();
+
+      await c.setPorts([8200]);
+      await c.setPorts([]);
+      expect(c.ports, testConfig.ports);
+      expect(await c.store.ports(), isNull);
+
+      await c.setPorts([8200]);
+      await c.setPorts(testConfig.ports);
+      expect(await c.store.ports(), isNull);
+    });
+
     // Review finding 3: an automatic scan re-applied the remembered server and
     // silently undid an explicit Default.
     test('an automatic scan never changes the committed URL', () async {

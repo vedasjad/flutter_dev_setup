@@ -23,6 +23,7 @@ void main() {
         store.rememberedHostKey,
         store.rememberedOctetKey,
         store.lanHostKey,
+        store.portsKey,
       ],
       [
         'devBaseUrl',
@@ -33,8 +34,27 @@ void main() {
         'devDiscoveredHost',
         'devDiscoveredOctet',
         'devLanHost',
+        'devScanPorts',
       ],
     );
+  });
+
+  test('keeps the ports a developer chose until they are cleared', () async {
+    final store = DevSetupStore(keyPrefix: 'dev');
+    expect(await store.ports(), isNull);
+
+    await store.setPorts([8200, 5001]);
+    expect(await store.ports(), [8200, 5001]);
+
+    await store.setPorts([]);
+    expect(await store.ports(), isNull);
+  });
+
+  test('reads ports stored as anything but ports as unset', () async {
+    for (final stored in <Object>['5001,http', '', 5001]) {
+      SharedPreferences.setMockInitialValues({'devScanPorts': stored});
+      expect(await DevSetupStore(keyPrefix: 'dev').ports(), isNull);
+    }
   });
 
   test('keeps the LAN host apart from the last server used', () async {

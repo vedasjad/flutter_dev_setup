@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:flutter/foundation.dart' show listEquals;
 import 'package:flutter/widgets.dart';
 
 import 'discovery.dart';
@@ -37,8 +38,7 @@ class DevSetupController extends ChangeNotifier {
   }) : assert(config.ports.isNotEmpty, 'DiscoveryConfig.ports is empty'),
        _defaultBaseUrl = defaultBaseUrl,
        store = store ?? DevSetupStore(config: config),
-       _newScanner =
-           scannerFactory ?? (() => DevServerDiscovery(config: config));
+       _scannerFactory = scannerFactory;
 
   final String _defaultBaseUrl;
   final String defaultSuffix;
@@ -48,7 +48,7 @@ class DevSetupController extends ChangeNotifier {
   final void Function(String url) onBaseUrlChanged;
   final DiscoveryConfig config;
   final DevSetupStore store;
-  final DevServerScanner Function() _newScanner;
+  final DevServerScanner Function()? _scannerFactory;
   final Duration pingInterval;
   final bool enableDiscovery;
 
@@ -105,6 +105,11 @@ class DevSetupController extends ChangeNotifier {
   Map<String, String> _pins = {};
   String? _remembered;
   String? _lanHost;
+  List<int>? _ports;
+
+  /// What a scan looks on: the developer's choice from [setPorts], or
+  /// [config]'s.
+  List<int> get ports => _ports ?? config.ports;
 
   // Ranking inputs as they stood when the scan began, so a result that lands
   // mid-scan cannot reshuffle what is already on screen.
@@ -177,6 +182,7 @@ class DevSetupController extends ChangeNotifier {
     final pins = await store.pins();
     final remembered = await store.rememberedHost();
     final lanHost = await store.lanHost();
+    final ports = await store.ports();
     if (_disposed) return;
     suffixController.text = suffix;
     _setOrigin(stripSuffix(saved, suffix.trim()));
@@ -185,6 +191,7 @@ class DevSetupController extends ChangeNotifier {
     _pins = pins;
     _remembered = remembered;
     _lanHost = lanHost;
+    _ports = ports;
     _resetList();
     _detectUrlMode();
     _notify();
@@ -330,6 +337,17 @@ class DevSetupController extends ChangeNotifier {
     _activeScanner = null;
     _scanPhase = ScanPhase.cancelled;
     _notify();
+  }
+
+  /// Scans [ports] from now on, on this device, and starts a scan on them. An
+  /// empty list, or [config]'s own ports, goes back to [config]'s.
+  Future<void> setPorts(List<int> ports) async {
+    _ports = ports.isEmpty || listEquals(ports, config.ports)
+        ? null
+        : List.unmodifiable(ports);
+    _notify();
+    await store.setPorts(_ports);
+    await scan();
   }
 
   /// Re-checks saved servers without sweeping the network.
@@ -631,6 +649,10 @@ class DevSetupController extends ChangeNotifier {
   }
 
   // -- helpers ---------------------------------------------------------------
+
+  DevServerScanner _newScanner() =>
+      _scannerFactory?.call() ??
+      DevServerDiscovery(config: config.withPorts(ports));
 
   void _detectUrlMode() {
     final origin = baseOrigin;

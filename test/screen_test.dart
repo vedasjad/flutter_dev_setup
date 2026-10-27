@@ -268,6 +268,33 @@ void main() {
     expect(find.byIcon(Icons.check_rounded), findsOneWidget);
   });
 
+  testWidgets('the ports dialog rejects a non-port and scans the ports saved', (
+    tester,
+  ) async {
+    final fake = FakeScanner();
+    final c = await buildController(scanner: fake);
+    await pumpScreen(tester, c);
+
+    await tester.tap(find.byTooltip('Ports to scan'));
+    await tester.pumpAndSettle();
+    expect(find.text('5001, 8080'), findsOneWidget);
+    expect(find.textContaining('go back to 5001, 8080'), findsOneWidget);
+
+    await tester.enterText(find.byType(TextField).last, '8200, 70000');
+    await tester.tap(find.text('Save'));
+    await tester.pumpAndSettle();
+    expect(find.textContaining('Ports from 1 to 65535'), findsOneWidget);
+    expect(find.byType(Dialog), findsOneWidget);
+
+    await tester.enterText(find.byType(TextField).last, '8200, 5001');
+    await tester.tap(find.text('Save'));
+    await tester.pumpAndSettle();
+
+    expect(find.byType(Dialog), findsNothing);
+    expect(c.ports, [8200, 5001]);
+    expect(fake.scanCalls, 1);
+  });
+
   testWidgets('the dialogs scroll rather than overflow above a keyboard', (
     tester,
   ) async {
@@ -414,6 +441,7 @@ void main() {
 
     expect(find.text('Local IP'), findsNothing);
     expect(find.byTooltip('Scan again'), findsNothing);
+    expect(find.byTooltip('Ports to scan'), findsNothing);
     expect(find.byTooltip('Add an address'), findsOneWidget);
     expect(find.textContaining('Tap Local IP'), findsNothing);
   });

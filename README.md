@@ -138,7 +138,7 @@ Pass it to the screen as `discovery:`. Also pass the same object to `DevSetup.is
 
 | Field | Default | Meaning |
 | --- | --- | --- |
-| `ports` | `[8080, 3000, 5000, 8000]` | The first port is swept across the subnet. The rest are tried only on hosts already known to be up. An `http://` address saved with + and no port gets the first. |
+| `ports` | `[8080, 3000, 5000, 8000]` | The first port is swept across the subnet. The rest are tried only on hosts already known to be up. An `http://` address saved with + and no port gets the first. A developer can scan other ports on their own device with the screen's ports button, which also starts a scan, and an empty field goes back to these. |
 | `healthPath` | `/` | Requested at the server's root, whatever path the base URL has. A missing leading `/` is added. |
 | `isHealthy` | any 2xx | Decides from the status code and body whether the server is yours. It sees at most the first megabyte of the body. |
 | `hostHeader` | `x-dev-host` | Response header a server can use to name itself. |
@@ -212,7 +212,7 @@ Pass it to the screen as `strings:`. The `label` argument names the range that w
 
 ## Storage
 
-`DevSetupStore` keeps everything in `SharedPreferences`. Each key is `keyPrefix` followed by a fixed name: `BaseUrl`, `BaseUrlSuffix`, `CustomServers`, `ServerLabels`, `ServerPins`, `DiscoveredHost`, `DiscoveredOctet` or `LanHost`. The prefix defaults to `devSetup`. Pass your own prefix to reuse the key names an existing setup already has. For example, `dev` gives `devBaseUrl`.
+`DevSetupStore` keeps everything in `SharedPreferences`. Each key is `keyPrefix` followed by a fixed name: `BaseUrl`, `BaseUrlSuffix`, `CustomServers`, `ServerLabels`, `ServerPins`, `DiscoveredHost`, `DiscoveredOctet`, `LanHost` or `ScanPorts`. The prefix defaults to `devSetup`. Pass your own prefix to reuse the key names an existing setup already has. For example, `dev` gives `devBaseUrl`.
 
 ```dart
 final devStore = DevSetupStore(keyPrefix: 'dev', config: discovery);

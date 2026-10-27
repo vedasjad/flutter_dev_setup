@@ -18,6 +18,7 @@ export 'src/ui/dialogs.dart'
         NameDialogResult,
         RenameServer,
         showAddServerDialog,
+        showScanPortsDialog,
         showServerNameDialog;
 export 'src/ui/location_screen.dart';
 export 'src/ui/location_strings.dart';
