@@ -218,6 +218,17 @@ class _DevSetupScreenState extends State<DevSetupScreen>
     if (origin != null) await _controller.addCustom(origin);
   }
 
+  Future<void> _editPorts() async {
+    final ports = await showScanPortsDialog(
+      context,
+      ports: _controller.ports,
+      defaults: _controller.config.ports,
+      theme: _theme,
+      strings: _strings,
+    );
+    if (ports != null) await _controller.setPorts(ports);
+  }
+
   Future<void> _openLocation(MockLocationController location) =>
       Navigator.of(context).push(
         MaterialPageRoute<void>(
@@ -325,6 +336,12 @@ class _DevSetupScreenState extends State<DevSetupScreen>
                       onPressed: () => c.scan(),
                       tooltip: _strings.scanAgain,
                       icon: Icon(Icons.refresh_rounded, color: _theme.primary),
+                    ),
+                  if (c.enableDiscovery)
+                    IconButton(
+                      onPressed: _editPorts,
+                      tooltip: _strings.scanPorts,
+                      icon: Icon(Icons.tune_rounded, color: _theme.primary),
                     ),
                   IconButton(
                     onPressed: _add,

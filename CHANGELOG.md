@@ -8,6 +8,7 @@
 - Places come from coordinates in several formats, Google Maps links (shared short links are followed, and a directions link becomes a route), or a search. The default search needs no key: Photon around the developer's area and Nominatim everywhere, merged, nearest first. `PlaceSearch.from` and `RouteFinder.from` take an app's own functions, and a `PlaceResult` can leave its coordinates to a `locate` call made only when it is picked. `GooglePlaceSearch` and `GoogleRouteFinder` use a Maps Platform key.
 - Routes are built along roads by the OSRM demo server, or along straight lines, or pasted as points, a directions link or an encoded polyline. Playback can stop, loop or come back at the end, and pauses while another mode is in use.
 - Developers can save places, and apps can supply their own.
+- The ports a scan looks on can be changed on the device, from a ports button beside Scan again. The choice is kept per device as `ScanPorts`, starts a scan, and an empty field goes back to `DiscoveryConfig.ports`. `DevSetupController.ports` and `setPorts`, `DevSetupStore.ports` and `setPorts`, `DiscoveryConfig.withPorts` and `parsePorts`, and `showScanPortsDialog` are new, as are the `scanPorts…` strings.
 - Open Maps opens Google Maps (or Apple Maps on iOS) on what was typed, through the app's own `openUrl`, so the package adds no plugin; Paste link brings the copied link back. Apple Maps links are read as well as Google's.
 
 ## 0.2.3

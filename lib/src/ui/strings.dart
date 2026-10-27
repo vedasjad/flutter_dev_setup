@@ -55,6 +55,13 @@ class DevSetupStrings {
     this.addServerHint = 'http://my-machine:8080',
     this.addServerHelp = 'Kept in the list until you forget it.',
     this.addServerInvalid = 'Needs a scheme and a host, e.g. http://host:8080',
+    this.scanPorts = 'Ports to scan',
+    this.scanPortsBody =
+        'The first is tried on every device on this network, the rest only '
+        'on devices that answer.',
+    this.scanPortsHint = '8080, 3000',
+    this.scanPortsHelp = _scanPortsHelp,
+    this.scanPortsInvalid = 'Ports from 1 to 65535, separated by commas',
     this.invalidUrlTitle = 'Invalid URL',
     this.invalidUrlBody = 'Enter a valid URL before proceeding.',
     this.mockLocation = const MockLocationStrings(),
@@ -108,6 +115,13 @@ class DevSetupStrings {
   final String addServerHint;
   final String addServerHelp;
   final String addServerInvalid;
+  final String scanPorts;
+  final String scanPortsBody;
+  final String scanPortsHint;
+
+  /// Given the app's own ports, which an empty field goes back to.
+  final String Function(List<int> defaults) scanPortsHelp;
+  final String scanPortsInvalid;
   final String invalidUrlTitle;
   final String invalidUrlBody;
 
@@ -123,4 +137,7 @@ class DevSetupStrings {
   static String _nothingFound(String label) =>
       'No dev server found on $label. Enter the URL manually.';
   static String _latency(int ms) => '$ms ms';
+  static String _scanPortsHelp(List<int> defaults) =>
+      'Kept on this device. Leave it empty to go back to '
+      '${defaults.join(', ')}.';
 }

@@ -29,6 +29,7 @@ class DevSetupStore {
   String get rememberedHostKey => '${keyPrefix}DiscoveredHost';
   String get rememberedOctetKey => '${keyPrefix}DiscoveredOctet';
   String get lanHostKey => '${keyPrefix}LanHost';
+  String get portsKey => '${keyPrefix}ScanPorts';
 
   Future<SharedPreferences> get _prefs => SharedPreferences.getInstance();
 
@@ -117,6 +118,24 @@ class DevSetupStore {
 
   Future<void> setLanHost(String host) async {
     await (await _prefs).setString(lanHostKey, host);
+  }
+
+  /// Ports the developer chose to scan in place of [DiscoveryConfig.ports],
+  /// or null to scan those.
+  Future<List<int>?> ports() async {
+    final raw = _string(await _read(portsKey));
+    final ports = raw == null ? null : DiscoveryConfig.parsePorts(raw);
+    return ports == null || ports.isEmpty ? null : ports;
+  }
+
+  /// Null or empty goes back to [DiscoveryConfig.ports].
+  Future<void> setPorts(List<int>? ports) async {
+    final prefs = await _prefs;
+    if (ports == null || ports.isEmpty) {
+      await prefs.remove(portsKey);
+    } else {
+      await prefs.setString(portsKey, ports.join(','));
+    }
   }
 
   Future<Map<String, String>> _readMap(String key) async {

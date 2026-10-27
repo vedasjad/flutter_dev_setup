@@ -71,6 +71,35 @@ class DiscoveryConfig {
   int get primaryPort => ports.first;
   List<int> get fallbackPorts => ports.sublist(1);
 
+  DiscoveryConfig withPorts(List<int> ports) => DiscoveryConfig(
+    ports: ports,
+    healthPath: healthPath,
+    isHealthy: isHealthy,
+    hostHeader: hostHeader,
+    lanAddressHeader: lanAddressHeader,
+    routerAddresses: routerAddresses,
+    leaseBandStart: leaseBandStart,
+    leaseBandEnd: leaseBandEnd,
+    connectTimeout: connectTimeout,
+    emulatorConnectTimeout: emulatorConnectTimeout,
+    verifyTimeout: verifyTimeout,
+    reverseLookupTimeout: reverseLookupTimeout,
+    concurrency: concurrency,
+  );
+
+  /// Ports separated by commas or spaces, repeats dropped, in the order typed.
+  /// Empty for blank text and null for anything that is not a port.
+  static List<int>? parsePorts(String text) {
+    final ports = <int>{};
+    for (final token in text.trim().split(RegExp(r'[\s,;]+'))) {
+      if (token.isEmpty) continue;
+      final port = int.tryParse(token);
+      if (port == null || port < 1 || port > 65535) return null;
+      ports.add(port);
+    }
+    return ports.toList();
+  }
+
   static bool defaultIsHealthy(int statusCode, String body) =>
       statusCode >= 200 && statusCode < 300;
 

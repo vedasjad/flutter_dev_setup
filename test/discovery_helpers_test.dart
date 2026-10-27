@@ -535,6 +535,26 @@ void main() {
         throwsAssertionError,
       );
     });
+
+    test('parses typed ports in order, without repeats', () {
+      expect(DiscoveryConfig.parsePorts('5001, 8080 3000;5001'), [
+        5001,
+        8080,
+        3000,
+      ]);
+      expect(DiscoveryConfig.parsePorts('  '), isEmpty);
+      expect(DiscoveryConfig.parsePorts('5001, 0'), isNull);
+      expect(DiscoveryConfig.parsePorts('65536'), isNull);
+      expect(DiscoveryConfig.parsePorts('5001, http'), isNull);
+    });
+
+    test('withPorts changes nothing else', () {
+      const config = DiscoveryConfig(healthPath: '/ping', concurrency: 8);
+      final moved = config.withPorts([8200]);
+      expect(moved.ports, [8200]);
+      expect(moved.healthPath, '/ping');
+      expect(moved.concurrency, 8);
+    });
   });
 
   group('explicitPortOf', () {

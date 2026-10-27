@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../controller.dart';
+import '../discovery_config.dart';
 import '../models.dart';
 import 'location_strings.dart';
 import 'shape.dart';
@@ -42,6 +43,29 @@ Future<String?> showAddServerDialog(
   context: context,
   builder: (_) =>
       _AddServerDialog(initial: initial, theme: theme, strings: strings),
+);
+
+/// Returns the ports typed, or an empty list to go back to [defaults].
+Future<List<int>?> showScanPortsDialog(
+  BuildContext context, {
+  required List<int> ports,
+  required List<int> defaults,
+  required DevSetupTheme theme,
+  required DevSetupStrings strings,
+}) => showDialog<List<int>>(
+  context: context,
+  builder: (_) => _ValueDialog<List<int>>(
+    theme: theme,
+    title: strings.scanPorts,
+    subtitle: strings.scanPortsBody,
+    initial: ports.join(', '),
+    hint: strings.scanPortsHint,
+    help: strings.scanPortsHelp(defaults),
+    invalid: strings.scanPortsInvalid,
+    save: strings.save,
+    cancel: strings.cancel,
+    parse: DiscoveryConfig.parsePorts,
+  ),
 );
 
 sealed class PlaceNameResult {
